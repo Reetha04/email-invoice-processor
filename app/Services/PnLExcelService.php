@@ -11,7 +11,6 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
-use App\Services\GoogleSheetsService;
 
 class PnLExcelService
 {
@@ -22,30 +21,30 @@ class PnLExcelService
         'MY' => 4.70,
     ];
 
-    private $excelColumns = [
-        'A' => 'S.No',
-        'B' => 'Tour Number',
-        'C' => 'Invoice Number',
-        'D' => 'Type',
-        'E' => 'Start Date',
-        'F' => 'End Date',
-        'G' => 'Credit Type',
-        'H' => 'Agent Name',
-        'I' => 'Hotel Name',
-        'J' => 'Amount (USD)',
-        'K' => 'Exchange Rate',
-        'L' => 'Amount (Local)',
-        'M' => 'Remarks'
-    ];
-
-    // Replace the processAndUpdateExcel method in PnLExcelService.php with:
+  private $excelColumns = [
+    'A' => 'S.No',
+    'B' => 'Tour Number',
+    'C' => 'Invoice Number',
+    'D' => 'Client Name',        // ✅ NEW COLUMN
+    'E' => 'Type',
+    'F' => 'Start Date',
+    'G' => 'End Date',
+    'H' => 'Credit Type',
+    'I' => 'Agent Name',
+    'J' => 'Description',
+    'K' => 'Amount (USD)',
+    'L' => 'Exchange Rate',
+    'M' => 'Amount (Local)',
+    'N' => 'Remarks'
+];
 
 public function processAndUpdateExcel(PnlRecord $record)
 {
     try {
         Log::info("Processing PnL Email ID: " . $record->id);
+        $profitLossFromEmail = $record->profit_loss;
+        Log::info("Profit/Loss from database: " . ($profitLossFromEmail ?? 'null'));
         
-        // Get items already saved in database
         $items = PnlItem::where('pnl_record_id', $record->id)->get();
         
         if ($items->isEmpty()) {
@@ -60,6 +59,8 @@ public function processAndUpdateExcel(PnlRecord $record)
         $tourRef = $record->tour_ref;
         $invoiceNumber = $record->invoice_number;
         $agentName = $record->agent_name;
+        $startDate = $record->start_date ?? date('Y-m-d');
+        $endDate = $record->end_date ?? date('Y-m-d');
         
         // Build items for Excel from database
         $allItems = [];
@@ -69,581 +70,353 @@ public function processAndUpdateExcel(PnlRecord $record)
             $remarks = '';
             $itemDetails = json_decode($item->item_details, true);
             
+            // ✅ FIX: Use service_name for description
+            $description = $item->service_name ?? $item->type;
+            
+            // For hotels, use hotel_name if available
+            if ($item->type == 'HOTEL') {
+                $description = $item->hotel_name ?? $item->service_name ?? $item->type;
+            }
+            
+            $amount = $item->amount_original;
+            if ($item->type != 'INVOICE') {
+                $amount = -abs($amount);
+            }
+            
             if ($item->type == 'INVOICE') {
                 $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                $description = 'INVOICE';
             } elseif ($item->type == 'HOTEL') {
                 $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
             } elseif ($item->type == 'ATTRACTION') {
-                $remarks = $itemDetails['remarks'] ?? $item->service_name;
+                $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
             } elseif ($item->type == 'TOUR TRANSFER') {
-                $remarks = 'Total tour transfer expenses';
+                $remarks = $itemDetails['remarks'] ?? 'Tour transfer';
             } elseif ($item->type == 'TRANSPORT') {
-                $remarks = 'Total transport expenses';
+                $remarks = $itemDetails['remarks'] ?? 'Transport expenses';
             }
             
             $allItems[] = [
                 'sno' => $sno++,
                 'type' => $item->type,
-                'start_date' => $record->start_date ?? date('Y-m-d'),
-                'end_date' => $record->end_date ?? date('Y-m-d'),
+                'client_name' => $item->client_name ?? '',
+                'description' => $description,  // ✅ Now uses service_name
+                'start_date' => $item->start_date ?? $startDate,
+                'end_date' => $item->end_date ?? $endDate,
                 'credit_type' => $item->credit_type,
                 'agent_name' => $agentName,
-                'hotel_name' => $item->hotel_name,
-                'amount_usd' => $item->amount_original,
+                'amount_usd' => $amount,
                 'exchange_rate' => $exchangeRate,
-                'amount_local' => round($item->amount_original * $exchangeRate, 2),
+                'amount_local' => round($amount * $exchangeRate, 2),
                 'remarks' => $remarks
             ];
         }
-        
-        Log::info("Total items to insert: " . count($allItems));
-        
-        if (empty($allItems)) {
+
+            
+            Log::info("Total items to insert: " . count($allItems));
+            
+            if (empty($allItems)) {
+                return [
+                    'success' => false,
+                    'message' => 'No items to process'
+                ];
+            }
+            
+            $excelPath = $this->getExcelFilePath($countryCode);
+            $spreadsheet = $this->loadOrCreateSpreadsheet($excelPath, $countryCode);
+            
+            $existingRows = $this->checkExistingEntries($spreadsheet, $tourRef, $invoiceNumber);
+            
+            if ($existingRows['found']) {
+                Log::info("Updating existing entries for Tour: {$tourRef}, Invoice: {$invoiceNumber}");
+                $this->updateExistingEntries($spreadsheet, $allItems, $tourRef, $invoiceNumber, $existingRows['rows'], $profitLossFromEmail, $exchangeRate, $agentName);
+                $action = 'updated';
+            } else {
+                Log::info("Inserting new entries for Tour: {$tourRef}, Invoice: {$invoiceNumber}");
+                $this->addItemsToSpreadsheet($spreadsheet, $allItems, $tourRef, $invoiceNumber, $profitLossFromEmail, $exchangeRate, $agentName);
+                $action = 'inserted';
+            }
+            
+            $this->saveSpreadsheet($spreadsheet, $excelPath);
+            
+            $record->update([
+                'status' => 'approved',
+                'processing_status' => 'completed'
+            ]);
+            
             return [
-                'success' => false,
-                'message' => 'No items to process'
+                'success' => true,
+                'action' => $action,
+                'message' => $action == 'updated' ? "✅ PnL Updated successfully!" : "✅ New PnL Inserted!",
+                'items_count' => count($allItems),
+                'items' => $allItems,
+                'excel_path' => $excelPath
             ];
+            
+        } catch (\Exception $e) {
+            Log::error('PnL Excel processing failed: ' . $e->getMessage());
+            Log::error($e->getTraceAsString());
+            return ['success' => false, 'message' => 'Error: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * Format amount for Excel (positive number or brackets for negative)
+     */
+private function formatAmount($amount)
+{
+    if ($amount >= 0) {
+        return number_format($amount, 2);
+    }
+    return '(' . number_format(abs($amount), 2) . ')';
+}
+    /**
+     * Parse amount from cell (handles bracket format like (250))
+     */
+    private function parseAmount($value)
+    {
+        if (is_numeric($value)) {
+            return (float)$value;
         }
         
-        // ========== CRITICAL: Check for existing entries before inserting ==========
-        $excelPath = $this->getExcelFilePath($countryCode);
-        $spreadsheet = $this->loadOrCreateSpreadsheet($excelPath, $countryCode);
-        
-        // Check if this Tour Number + Invoice Number combination already exists
-        $existingRows = $this->checkExistingEntries($spreadsheet, $tourRef, $invoiceNumber);
-        
-        if ($existingRows['found']) {
-            // UPDATE existing entries
-            Log::info("Updating existing entries for Tour: {$tourRef}, Invoice: {$invoiceNumber}");
-            $this->updateExistingEntries($spreadsheet, $allItems, $tourRef, $invoiceNumber, $existingRows['rows']);
-            $action = 'updated';
-        } else {
-            // INSERT new entries
-            Log::info("Inserting new entries for Tour: {$tourRef}, Invoice: {$invoiceNumber}");
-            $this->addItemsToSpreadsheet($spreadsheet, $allItems, $tourRef, $invoiceNumber);
-            $action = 'inserted';
+        if (is_string($value)) {
+            if (preg_match('/\(([\d\.]+)\)/', $value, $match)) {
+                return - (float)$match[1];
+            }
+            if (preg_match('/[\d\.]+/', $value, $match)) {
+                return (float)$match[0];
+            }
         }
         
-        $this->saveSpreadsheet($spreadsheet, $excelPath);
+        return 0;
+    }
+
+    private function checkExistingEntries($spreadsheet, $tourRef, $invoiceNumber)
+    {
+        $sheet = $spreadsheet->getActiveSheet();
+        $highestRow = $sheet->getHighestRow();
+        $existingRows = [];
         
-        // Update the record
-        $record->update([
-            'status' => 'approved',
-            'processing_status' => 'completed'
-        ]);
+        if ($highestRow < 2) {
+            return ['found' => false, 'rows' => []];
+        }
+        
+        for ($row = 2; $row <= $highestRow; $row++) {
+            $existingTourRef = $sheet->getCell("B{$row}")->getValue();
+            $existingInvoice = $sheet->getCell("C{$row}")->getValue();
+            $existingType = $sheet->getCell("D{$row}")->getValue();
+            
+            if ($existingType == 'PROFIT / (LOSS)') {
+                continue;
+            }
+            
+            if ($existingTourRef == $tourRef && $existingInvoice == $invoiceNumber) {
+                $existingRows[] = $row;
+            }
+        }
         
         return [
-            'success' => true,
-            'action' => $action,
-            'message' => $action == 'updated' ? "✅ PnL Updated successfully!" : "✅ New PnL Inserted!",
-            'items_count' => count($allItems),
-            'hotels_count' => $items->where('type', 'HOTEL')->count(),
-            'attraction_count' => $items->where('type', 'ATTRACTION')->count(),
-            'tour_transfers_amount' => $items->where('type', 'TOUR TRANSFER')->sum('amount_original'),
-            'items' => $allItems,
-            'excel_path' => $excelPath
+            'found' => !empty($existingRows),
+            'rows' => $existingRows
         ];
-        
-    } catch (\Exception $e) {
-        Log::error('PnL Excel processing failed: ' . $e->getMessage());
-        Log::error($e->getTraceAsString());
-        return ['success' => false, 'message' => 'Error: ' . $e->getMessage()];
     }
-}
 
-/**
- * Check if entries already exist for given Tour Number and Invoice Number
- * Returns array with 'found' boolean and 'rows' array of row numbers
- */
-private function checkExistingEntries($spreadsheet, $tourRef, $invoiceNumber)
-{
-    $sheet = $spreadsheet->getActiveSheet();
-    $highestRow = $sheet->getHighestRow();
-    
-    $existingRows = [];
-    
-    if ($highestRow < 2) {
-        return ['found' => false, 'rows' => []];
-    }
-    
-    // Scan through all rows to find matching Tour Number + Invoice Number
-    for ($row = 2; $row <= $highestRow; $row++) {
-        $existingTourRef = $sheet->getCell("B{$row}")->getValue();
-        $existingInvoice = $sheet->getCell("C{$row}")->getValue();
-        
-        // Match both Tour Number AND Invoice Number
-        if ($existingTourRef == $tourRef && $existingInvoice == $invoiceNumber) {
-            $existingRows[] = $row;
-        }
-    }
-    
-    return [
-        'found' => !empty($existingRows),
-        'rows' => $existingRows
-    ];
-}
-
-/**
- * Update existing entries in the spreadsheet
- * First delete old entries, then insert new ones at the same positions
- */
-private function updateExistingEntries($spreadsheet, $newItems, $tourRef, $invoiceNumber, $existingRows)
+private function updateExistingEntries($spreadsheet, $newItems, $tourRef, $invoiceNumber, $existingRows, $profitLossFromEmail, $exchangeRate, $agentName)
 {
     $sheet = $spreadsheet->getActiveSheet();
     
-    // Sort rows in descending order to delete from bottom up (preserves row numbers)
     rsort($existingRows);
     
-    // Delete all existing rows for this combination
     foreach ($existingRows as $row) {
+        // Check and delete associated P&L row
+        $nextRow = $row + 1;
+        $nextRowType = $sheet->getCell("D{$nextRow}")->getValue();
+        if ($nextRowType == 'PROFIT / (LOSS)') {
+            $sheet->removeRow($nextRow);
+        }
         $sheet->removeRow($row);
-        Log::info("Removed existing row {$row} for Tour: {$tourRef}, Invoice: {$invoiceNumber}");
+        Log::info("Removed existing row {$row}");
     }
     
-    // Now add the new items at the bottom
-    $currentRow = $sheet->getHighestRow() + 1;
-    if ($currentRow < 2) {
-        $currentRow = 2;
-    }
+    $currentRow = max($sheet->getHighestRow() + 1, 2);
+    $firstItemRow = $currentRow;
     
     foreach ($newItems as $item) {
-        $sheet->setCellValue("A{$currentRow}", $item['sno']);
-        $sheet->setCellValue("B{$currentRow}", $tourRef ?? '-');
-        $sheet->setCellValue("C{$currentRow}", $invoiceNumber ?? '-');
-        $sheet->setCellValue("D{$currentRow}", $item['type']);
-        $sheet->setCellValue("E{$currentRow}", $item['start_date']);
-        $sheet->setCellValue("F{$currentRow}", $item['end_date']);
-        $sheet->setCellValue("G{$currentRow}", $item['credit_type']);
-        $sheet->setCellValue("H{$currentRow}", $item['agent_name']);
-        $sheet->setCellValue("I{$currentRow}", $item['hotel_name'] ?? '-');
-        $sheet->setCellValue("J{$currentRow}", $item['amount_usd']);
-        $sheet->setCellValue("K{$currentRow}", $item['exchange_rate']);
-        $sheet->setCellValue("L{$currentRow}", $item['amount_local']);
-        $sheet->setCellValue("M{$currentRow}", $item['remarks']);
-        
-        // Color coding
-        $colors = [
-            'INVOICE' => 'D5E8D4',
-            'HOTEL' => 'FFF2CC',
-            'TRANSPORT' => 'DDEBF7',
-            'TOUR TRANSFER' => 'E2EFDA',
-            'ATTRACTION' => 'FCE4D6'
-        ];
-        
-        if (isset($colors[$item['type']])) {
-            $sheet->getStyle("A{$currentRow}:M{$currentRow}")->getFill()
-                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-                ->getStartColor()->setRGB($colors[$item['type']]);
-        }
-        
-        $sheet->getStyle("A{$currentRow}:M{$currentRow}")->applyFromArray([
-            'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
-        ]);
-        
-        Log::info("Added updated row {$currentRow}: Type={$item['type']}, Amount=\${$item['amount_usd']}");
+        $this->writeRow($sheet, $currentRow, $item, $tourRef, $invoiceNumber);
         $currentRow++;
+    }
+    
+    $lastItemRow = $currentRow - 1;
+    // Pass exchangeRate correctly
+    $this->addProfitLossRow($spreadsheet, $firstItemRow, $lastItemRow, $tourRef, $invoiceNumber, $agentName, $exchangeRate, $profitLossFromEmail);
+    
+    $this->autoSizeColumns($sheet);
+}
+
+private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceNumber, $profitLossFromEmail, $exchangeRate, $agentName)
+{
+    $sheet = $spreadsheet->getActiveSheet();
+    $currentRow = max($sheet->getHighestRow() + 1, 2);
+    $firstItemRow = $currentRow;
+    
+    foreach ($items as $item) {
+        $this->writeRow($sheet, $currentRow, $item, $tourRef, $invoiceNumber);
+        $currentRow++;
+    }
+    
+    $lastItemRow = $currentRow - 1;
+    // Pass exchangeRate correctly
+    $this->addProfitLossRow($spreadsheet, $firstItemRow, $lastItemRow, $tourRef, $invoiceNumber, $agentName, $exchangeRate, $profitLossFromEmail);
+    
+    $this->autoSizeColumns($sheet);
+}
+
+    /**
+     * Write a single row to spreadsheet
+     */
+    private function writeRow($sheet, $row, $item, $tourRef, $invoiceNumber)
+{
+    $amount = $item['amount_usd'];
+    $localAmount = $item['amount_local'];
+    
+    $formattedAmount = $this->formatAmount($amount);
+    $formattedLocalAmount = $this->formatAmount($localAmount);
+    
+    $sheet->setCellValue("A{$row}", $item['sno']);
+    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+    $sheet->setCellValue("D{$row}", $item['client_name'] ?? '');  // ✅ NEW
+    $sheet->setCellValue("E{$row}", $item['type']);
+    $sheet->setCellValue("F{$row}", $item['start_date']);
+    $sheet->setCellValue("G{$row}", $item['end_date']);
+    $sheet->setCellValue("H{$row}", $item['credit_type']);
+    $sheet->setCellValue("I{$row}", $item['agent_name']);
+    $sheet->setCellValue("J{$row}", $item['description']);
+    $sheet->setCellValue("K{$row}", $formattedAmount);
+    $sheet->setCellValue("L{$row}", $item['exchange_rate']);
+    $sheet->setCellValue("M{$row}", $formattedLocalAmount);
+    $sheet->setCellValue("N{$row}", $item['remarks']);
+    
+    // Color coding (update ranges)
+    $colors = [
+        'INVOICE' => 'D5E8D4',
+        'HOTEL' => 'FFF2CC',
+        'TRANSPORT' => 'DDEBF7',
+        'TOUR TRANSFER' => 'E2EFDA',
+        'ATTRACTION' => 'FCE4D6',
+        'MEALS' => 'E1C699',
+        'OTHER RATES' => 'D9D9D9'
+    ];
+    
+    if (isset($colors[$item['type']])) {
+        $sheet->getStyle("A{$row}:N{$row}")->getFill()  // ✅ Changed M to N
+            ->setFillType(Fill::FILL_SOLID)
+            ->getStartColor()->setRGB($colors[$item['type']]);
+    }
+    
+    $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([  // ✅ Changed M to N
+        'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN]]
+    ]);
+    
+    // Color for negative amounts
+    if ($amount < 0) {
+        $sheet->getStyle("K{$row}")->getFont()->getColor()->setRGB('DC3545');
+        $sheet->getStyle("M{$row}")->getFont()->getColor()->setRGB('DC3545');
+    } else {
+        $sheet->getStyle("K{$row}")->getFont()->getColor()->setRGB('28A745');
+        $sheet->getStyle("M{$row}")->getFont()->getColor()->setRGB('28A745');
     }
 }
 
-/**
- * Insert new entries (no existing found)
- */
-private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceNumber)
+private function autoSizeColumns($sheet)
 {
-    $sheet = $spreadsheet->getActiveSheet();
-    $row = $sheet->getHighestRow() + 1;
-    
-    if ($row < 2) {
-        $row = 2;
-    }
-    
-    foreach ($items as $item) {
-        $sheet->setCellValue("A{$row}", $item['sno']);
-        $sheet->setCellValue("B{$row}", $tourRef ?? '-');
-        $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-        $sheet->setCellValue("D{$row}", $item['type']);
-        $sheet->setCellValue("E{$row}", $item['start_date']);
-        $sheet->setCellValue("F{$row}", $item['end_date']);
-        $sheet->setCellValue("G{$row}", $item['credit_type']);
-        $sheet->setCellValue("H{$row}", $item['agent_name']);
-        $sheet->setCellValue("I{$row}", $item['hotel_name'] ?? '-');
-        $sheet->setCellValue("J{$row}", $item['amount_usd']);
-        $sheet->setCellValue("K{$row}", $item['exchange_rate']);
-        $sheet->setCellValue("L{$row}", $item['amount_local']);
-        $sheet->setCellValue("M{$row}", $item['remarks']);
-        
-        // Color coding
-        $colors = [
-            'INVOICE' => 'D5E8D4',
-            'HOTEL' => 'FFF2CC',
-            'TRANSPORT' => 'DDEBF7',
-            'TOUR TRANSFER' => 'E2EFDA',
-            'ATTRACTION' => 'FCE4D6'
-        ];
-        
-        if (isset($colors[$item['type']])) {
-            $sheet->getStyle("A{$row}:M{$row}")->getFill()
-                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-                ->getStartColor()->setRGB($colors[$item['type']]);
-        }
-        
-        $sheet->getStyle("A{$row}:M{$row}")->applyFromArray([
-            'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
-        ]);
-        
-        Log::info("Added new row {$row}: Type={$item['type']}, Amount=\${$item['amount_usd']}");
-        $row++;
-    }
-    
-    foreach (range('A', 'M') as $col) {
+    foreach (range('A', 'N') as $col) {  // ✅ Changed M to N
         $sheet->getColumnDimension($col)->setAutoSize(true);
     }
 }
-    /**
-     * Extract hotels from Hotels/Cruises table - IMPROVED for Vietnam format
-     */
-    private function extractHotelsFromTable($text)
-    {
-        $hotels = [];
-        
-        if (!preg_match('/Hotels\/Cruises/i', $text)) {
-            Log::info("No Hotels/Cruises section found in email");
-            return $hotels;
-        }
-        
-        // Find the Hotels/Cruises section
-        if (!preg_match('/Hotels\/Cruises(.*?)(?:Attraction|Tour Transfers|Transport|Meals|Cost Per Person|$)/is', $text, $sectionMatch)) {
-            Log::warning("Hotels/Cruises section found but cannot parse");
-            return $hotels;
-        }
-        
-        $section = $sectionMatch[1];
-        Log::info("Hotels section found: " . substr($section, 0, 500));
-        
-        // Split into lines
-        $lines = explode("\n", $section);
-        
-        foreach ($lines as $line) {
-            $line = trim($line);
-            if (empty($line)) continue;
-            
-            // Skip header lines
-            if (preg_match('/^(NAME|SGL|DBL|TPL|CWB|CNB|NIGHTS|ROOM NIGHT|TOTAL)/i', $line)) {
-                continue;
-            }
-            
-            // Skip Total row
-            if (preg_match('/^Total/i', $line)) {
-                continue;
-            }
-            
-            // Look for hotel pattern: Name followed by numbers
-            // Example: "La Passion Classic Hotel    0   37 / 37   0   0   0   2   74.00"
-            
-            // Clean the line
-            $cleanLine = preg_replace('/\s+/', ' ', $line);
-            $cleanLine = trim($cleanLine);
-            
-            // Check if this looks like a hotel row (has a name and numbers)
-            if (preg_match('/^([A-Za-z\s]+?)\s+(\d+)\s+([\d\s\/]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([\d\.]+)/i', $cleanLine, $match)) {
-                $name = trim($match[1]);
-                $nights = intval($match[7]);
-                $amount = floatval($match[8]);
-                
-                if ($amount > 0 && strlen($name) > 3 && !str_contains(strtolower($name), 'total')) {
-                    // Check for duplicate
-                    $exists = false;
-                    foreach ($hotels as $existing) {
-                        if ($existing['name'] === $name) {
-                            $exists = true;
-                            break;
-                        }
-                    }
-                    if (!$exists) {
-                        $hotels[] = [
-                            'name' => $name,
-                            'amount' => $amount,
-                            'nights' => $nights
-                        ];
-                        Log::info("✓ Found hotel: {$name} - \${$amount}, {$nights} nights");
-                    }
-                }
-            }
-            // Alternative pattern for simpler hotel rows
-            elseif (preg_match('/^([A-Za-z\s]+?)\s+[\d\s\/]+\s+(\d+)\s+([\d\.]+)$/i', $cleanLine, $match)) {
-                $name = trim($match[1]);
-                $nights = intval($match[2]);
-                $amount = floatval($match[3]);
-                
-                if ($amount > 0 && strlen($name) > 3) {
-                    $exists = false;
-                    foreach ($hotels as $existing) {
-                        if ($existing['name'] === $name) {
-                            $exists = true;
-                            break;
-                        }
-                    }
-                    if (!$exists) {
-                        $hotels[] = [
-                            'name' => $name,
-                            'amount' => $amount,
-                            'nights' => $nights
-                        ];
-                        Log::info("✓ Found hotel (alt): {$name} - \${$amount}, {$nights} nights");
-                    }
-                }
-            }
-        }
-        
-        Log::info("Total hotels extracted: " . count($hotels));
-        return $hotels;
-    }
 
     /**
-     * Extract individual attractions from Attraction table
+     * Add Profit/Loss row using value from email
      */
-    private function extractIndividualAttractions($text)
-    {
-        $attractions = [];
+private function addProfitLossRow($spreadsheet, $startRow, $endRow, $tourRef, $invoiceNumber, $agentName, $exchangeRate, $profitLossFromEmail = null)
+{
+    $sheet = $spreadsheet->getActiveSheet();
+    
+    if ($profitLossFromEmail !== null && $profitLossFromEmail != 0) {
+        $profitLoss = $profitLossFromEmail;
+    } else {
+        $invoiceTotal = 0;
+        $expenseTotal = 0;
         
-        if (!preg_match('/Attraction(.*?)(?:Tour Transfers|Transport|Meals|Total Tour Cost|$)/is', $text, $sectionMatch)) {
-            return $attractions;
-        }
-        
-        $section = $sectionMatch[1];
-        Log::info("Attraction section found");
-        
-        // Split into lines
-        $lines = explode("\n", $section);
-        $currentAttraction = null;
-        
-        foreach ($lines as $line) {
-            $line = trim($line);
-            if (empty($line)) continue;
+        for ($row = $startRow; $row <= $endRow; $row++) {
+            $type = $sheet->getCell("E{$row}")->getValue();  // ✅ Changed D to E (Type moved)
+            $amountCell = $sheet->getCell("K{$row}")->getValue();  // ✅ Changed J to K
+            $amount = $this->parseAmount($amountCell);
             
-            // Skip header
-            if (preg_match('/^#DAY\(S\)|CITY|ATTRACTION|ADULT ENTRANCE|CHILD ENTRANCE|TRANSFER|RATE/i', $line)) {
-                continue;
-            }
-            
-            // Look for attraction pattern: Day X, City, Attraction Name, then rate
-            // Example: "Day 2    Hanoi    Ninh Binh Bai Dinh Trang An Hang Mua SIC    SIC Transfer    0    0    0    Adult: 35.0319 Child: 0"
-            if (preg_match('/Day\s+(\d+)\s+([A-Za-z\s]+?)\s+([A-Za-z\s]+?)\s+(?:SIC Transfer|Private Transfers)?\s*\d+\s+\d+\s+\d+\s+Adult:\s*([\d\.]+)/i', $line, $match)) {
-                $day = $match[1];
-                $city = trim($match[2]);
-                $name = trim($match[3]);
-                $amount = floatval($match[4]);
-                
-                if ($amount > 0) {
-                    $attractions[] = [
-                        'day' => $day,
-                        'city' => $city,
-                        'name' => $name,
-                        'amount' => $amount
-                    ];
-                    Log::info("✓ Found attraction: Day {$day} - {$name} - \${$amount}");
-                }
-            }
-            // Simpler pattern
-            elseif (preg_match('/Day\s+(\d+)\s+([A-Za-z\s]+?)\s+Adult:\s*([\d\.]+)/i', $line, $match)) {
-                $day = $match[1];
-                $name = trim($match[2]);
-                $amount = floatval($match[3]);
-                
-                if ($amount > 0) {
-                    $attractions[] = [
-                        'day' => $day,
-                        'city' => '',
-                        'name' => $name,
-                        'amount' => $amount
-                    ];
-                    Log::info("✓ Found attraction (simple): Day {$day} - \${$amount}");
-                }
+            if ($type == 'INVOICE') {
+                $invoiceTotal += $amount;
+            } else {
+                $expenseTotal += $amount;
             }
         }
-        
-        return $attractions;
+        $profitLoss = $invoiceTotal - $expenseTotal;
     }
-
-    /**
-     * Get total transport amount
-     */
-    private function getTotalTransportAmount($text)
-    {
-        // Look for Transport section total
-        if (preg_match('/Transport.*?Total\s+Transport\s+[\d\.]+\s+([\d\.]+)/is', $text, $match)) {
-            $total = floatval($match[1]);
-            Log::info("Transport total found: " . $total);
-            return $total;
-        }
-        
-        if (preg_match('/Transport.*?(?:Total:|Total Transport)\s*([\d\.]+)\s*USD/is', $text, $match)) {
-            $total = floatval($match[1]);
-            Log::info("Transport total found (alt): " . $total);
-            return $total;
-        }
-        
-        return 0;
+    
+    $pnlRow = $endRow + 1;
+    $sheet->insertNewRowBefore($pnlRow);
+    
+    $sheet->setCellValue("A{$pnlRow}", '');
+    $sheet->setCellValue("B{$pnlRow}", $tourRef ?? '-');
+    $sheet->setCellValue("C{$pnlRow}", $invoiceNumber ?? '-');
+    $sheet->setCellValue("D{$pnlRow}", '');  // ✅ Client Name - blank
+    $sheet->setCellValue("E{$pnlRow}", 'PROFIT / (LOSS)');  // ✅ Type moved to E
+    $sheet->setCellValue("F{$pnlRow}", '');
+    $sheet->setCellValue("G{$pnlRow}", '');
+    $sheet->setCellValue("H{$pnlRow}", '');
+    $sheet->setCellValue("I{$pnlRow}", $agentName ?? '-');
+    $sheet->setCellValue("J{$pnlRow}", '');
+    
+    if ($profitLoss >= 0) {
+        $sheet->setCellValue("K{$pnlRow}", number_format($profitLoss, 2));
+        $sheet->setCellValue("N{$pnlRow}", "Profit: " . number_format($profitLoss, 2) . " USD");
+    } else {
+        $sheet->setCellValue("K{$pnlRow}", '(' . number_format(abs($profitLoss), 2) . ')');
+        $sheet->setCellValue("N{$pnlRow}", "Loss: " . number_format(abs($profitLoss), 2) . " USD");
     }
-
-    /**
-     * Get total tour transfers amount
-     */
-    private function getTotalTourTransfersAmount($text)
-    {
-        if (!preg_match('/Tour Transfers/i', $text)) {
-            return 0;
-        }
-        
-        // Look for Total at the bottom of Tour Transfers table
-        // From your email: "Total | 148.52 USD"
-        if (preg_match('/Tour Transfers.*?Total\s*\|\s*([\d\.]+)\s*USD/is', $text, $match)) {
-            $total = floatval($match[1]);
-            Log::info("Tour Transfers total found: " . $total);
-            return $total;
-        }
-        
-        if (preg_match('/Tour Transfers.*?Total\s*:?\s*([\d\.]+)\s*USD/is', $text, $match)) {
-            $total = floatval($match[1]);
-            Log::info("Tour Transfers total found (alt): " . $total);
-            return $total;
-        }
-        
-        return 0;
+    
+    $sheet->setCellValue("L{$pnlRow}", $exchangeRate);
+    
+    $localAmount = abs($profitLoss) * $exchangeRate;
+    if ($profitLoss >= 0) {
+        $sheet->setCellValue("M{$pnlRow}", round($localAmount, 2));
+    } else {
+        $sheet->setCellValue("M{$pnlRow}", '(' . number_format($localAmount, 2) . ')');
     }
-
-    /**
-     * Get total attraction amount
-     */
-    private function getTotalAttractionAmount($text)
-    {
-        // Look for Total at the bottom of Attraction table
-        // From your email: "Total | 358.93 USD"
-        if (preg_match('/Attraction.*?Total\s*\|\s*([\d\.]+)\s*USD/is', $text, $match)) {
-            $total = floatval($match[1]);
-            Log::info("Attraction total found: " . $total);
-            return $total;
-        }
-        
-        // Alternative: Total row in table
-        if (preg_match('/Attraction[\s\S]*?\|\s*Total\s*\|\s*([\d\.]+)\s*USD/i', $text, $match)) {
-            $total = floatval($match[1]);
-            Log::info("Attraction total found (alt): " . $total);
-            return $total;
-        }
-        
-        // Check for Other Rates section
-        if (preg_match('/Other Rates.*?Total\s*:?\s*([\d\.]+)\s*USD/is', $text, $match)) {
-            $total = floatval($match[1]);
-            Log::info("Other Rates total found: " . $total);
-            return $total;
-        }
-        
-        return 0;
+    
+    $sheet->getStyle("A{$pnlRow}:N{$pnlRow}")->applyFromArray([  // ✅ Changed M to N
+        'font' => ['bold' => true, 'size' => 11],
+        'fill' => [
+            'fillType' => Fill::FILL_SOLID,
+            'startColor' => ['rgb' => 'FFF3CD']
+        ],
+        'borders' => [
+            'allBorders' => [
+                'borderStyle' => Border::BORDER_THIN,
+                'color' => ['rgb' => 'CCCCCC']
+            ]
+        ]
+    ]);
+    
+    if ($profitLoss < 0) {
+        $sheet->getStyle("K{$pnlRow}")->getFont()->getColor()->setRGB('DC3545');
+        $sheet->getStyle("M{$pnlRow}")->getFont()->getColor()->setRGB('DC3545');
+    } else {
+        $sheet->getStyle("K{$pnlRow}")->getFont()->getColor()->setRGB('28A745');
+        $sheet->getStyle("M{$pnlRow}")->getFont()->getColor()->setRGB('28A745');
     }
-
-    /**
-     * Extract total tour cost
-     */
-    private function extractTotalTourCost($text)
-    {
-        $patterns = [
-            '/Total Tour Cost\s+([\d\.]+)\s*USD/i',
-            '/Total Tour Cost\s*:?\s*([\d\.]+)\s*USD/i',
-            '/Total Tour Cost\s*=\s*([\d\.]+)/i',
-            '/Total Tour Cost Without Markup\s*([\d\.]+)\s*USD/i',
-        ];
-        
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $text, $match)) {
-                $amount = floatval($match[1]);
-                if ($amount > 0) {
-                    Log::info("Found Total Tour Cost: " . $amount);
-                    return $amount;
-                }
-            }
-        }
-        
-        return 0;
-    }
-
-    private function extractTourNumber($text)
-    {
-        if (preg_match('/Tour No:\s*#?(\d+)/i', $text, $match)) {
-            return $match[1];
-        }
-        return null;
-    }
-
-    private function extractInvoiceNumber($text)
-    {
-        if (preg_match('/Is Number:\s*([A-Z]{2})\s*(\d+)/i', $text, $match)) {
-            return $match[1] . $match[2];
-        }
-        return null;
-    }
-
-    private function extractAgentName($text)
-    {
-        if (preg_match('/Agent:\s*([^\n]+)/i', $text, $match)) {
-            $agent = trim($match[1]);
-            $agent = preg_replace('/\s+No\..*$/i', '', $agent);
-            $agent = preg_replace('/\s+\d+.*$/i', '', $agent);
-            return trim($agent);
-        }
-        return 'Unknown';
-    }
-
-    private function extractTotalPax($text)
-    {
-        if (preg_match('/No\.\s*Adult:\s*(\d+)/i', $text, $match)) {
-            return intval($match[1]);
-        }
-        if (preg_match('/No\.\s*P(?:ass|ax):\s*(\d+)/i', $text, $match)) {
-            return intval($match[1]);
-        }
-        return 0;
-    }
-
-    private function extractTotalNights($text)
-    {
-        if (preg_match('/No\.\s*Night:\s*(\d+)/i', $text, $match)) {
-            return intval($match[1]);
-        }
-        return 0;
-    }
-
-    private function extractTravelDates($text, $totalNights)
-    {
-        $start = date('Y-m-d');
-        $end = date('Y-m-d', strtotime("+{$totalNights} days"));
-        
-        // Try to extract actual dates from email
-        if (preg_match('/(\d{1,2}\/\d{1,2}\/\d{4})/', $text, $match)) {
-            $start = date('Y-m-d', strtotime($match[1]));
-            $end = date('Y-m-d', strtotime($match[1] . " + {$totalNights} days"));
-        }
-        
-        return ['start' => $start, 'end' => $end];
-    }
-
-    private function detectCountry($invoiceNumber, $text)
-    {
-        if ($invoiceNumber && preg_match('/^([A-Z]{2})/', $invoiceNumber, $match)) {
-            $code = strtoupper($match[1]);
-            if ($code == 'IS') return 'LK';
-            if ($code == 'VN') return 'VN';
-            if ($code == 'SG') return 'SG';
-            if ($code == 'MY') return 'MY';
-        }
-        return 'VN'; // Default to Vietnam for your example
-    }
-
-    private function getCurrencyCode($countryCode)
-    {
-        $currencies = ['LK' => 'LKR', 'VN' => 'VND', 'SG' => 'SGD', 'MY' => 'MYR'];
-        return $currencies[$countryCode] ?? 'VND';
-    }
+    
+    return $pnlRow;
+}
 
     private function getExcelFilePath($countryCode)
     {
@@ -663,34 +436,47 @@ private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceN
         return $path;
     }
 
-    private function loadOrCreateSpreadsheet($path, $countryCode)
-    {
-        if (file_exists($path)) {
-            return IOFactory::load($path);
-        }
-        
-        $spreadsheet = new Spreadsheet();
-        $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle("PnL - " . $countryCode);
-        
-        foreach ($this->excelColumns as $col => $header) {
-            $sheet->setCellValue($col . '1', $header);
-        }
-        
-        $sheet->getStyle('A1:M1')->applyFromArray([
-            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 11],
-            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
-            'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]
-        ]);
-        
-        foreach (range('A', 'M') as $col) {
-            $sheet->getColumnDimension($col)->setAutoSize(true);
-        }
-        
-        return $spreadsheet;
+private function loadOrCreateSpreadsheet($path, $countryCode)
+{
+    if (file_exists($path)) {
+        return IOFactory::load($path);
     }
-
-
+    
+    $spreadsheet = new Spreadsheet();
+    $sheet = $spreadsheet->getActiveSheet();
+    $sheet->setTitle("PnL - " . $countryCode);
+    
+    $headers = [
+        'A1' => 'S.No',
+        'B1' => 'Tour Number',
+        'C1' => 'Invoice Number',
+        'D1' => 'Client Name',      // ✅ NEW
+        'E1' => 'Type',
+        'F1' => 'Start Date',
+        'G1' => 'End Date',
+        'H1' => 'Credit Type',
+        'I1' => 'Agent Name',
+        'J1' => 'Description',
+        'K1' => 'Amount (USD)',
+        'L1' => 'Exchange Rate',
+        'M1' => 'Amount (Local)',
+        'N1' => 'Remarks'
+    ];
+    
+    foreach ($headers as $cell => $header) {
+        $sheet->setCellValue($cell, $header);
+    }
+    
+    $sheet->getStyle('A1:N1')->applyFromArray([  // ✅ Changed M to N
+        'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 11],
+        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
+        'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER]
+    ]);
+    
+    $this->autoSizeColumns($sheet);
+    
+    return $spreadsheet;
+}
 
     private function saveSpreadsheet($spreadsheet, $path)
     {
@@ -740,197 +526,93 @@ private function addItemsToSpreadsheet($spreadsheet, $items, $tourRef, $invoiceN
             return '<div class="alert alert-danger">Error loading Excel file: ' . $e->getMessage() . '</div>';
         }
     }
-
-    public function processAndUpdateGoogleSheets(PnlRecord $record)
+    public function getRecordPreview($record)
 {
     try {
-        // Get the email content
-        $content = $record->body_html ?: $record->body;
-        $plainText = strip_tags($content);
-        $plainText = preg_replace('/\r\n/', "\n", $plainText);
+        $items = $record->items;
+        $exchangeRate = $this->exchangeRates[$record->country_code ?? 'VN'] ?? 25500;
         
-        Log::info("Processing PnL for Google Sheets: " . $record->id);
-
-        // Extract header information
-        $tourNumber = $this->extractTourNumber($plainText);
-        $invoiceNumber = $this->extractInvoiceNumber($plainText);
-        $agentName = $this->extractAgentName($plainText);
-        $totalPax = $this->extractTotalPax($plainText);
-        $totalNights = $this->extractTotalNights($plainText);
-        $totalTourCost = $this->extractTotalTourCost($plainText);
-
-        $countryCode = $this->detectCountry($invoiceNumber, $plainText);
-        $exchangeRate = $this->exchangeRates[$countryCode] ?? 330;
-        $tourRef = $tourNumber ? $tourNumber . 'CNTL' : null;
-        $travelDates = $this->extractTravelDates($plainText, $totalNights);
-
-        // Extract ALL data from different sections
-        $hotels = $this->extractHotelsFromTable($plainText);
-        $transportTotal = $this->getTotalTransportAmount($plainText);
-        $tourTransfersTotal = $this->getTotalTourTransfersAmount($plainText);
-        $attractionTotal = $this->getTotalAttractionAmount($plainText);
-
-        // Build all items for Google Sheets
-        $allItems = [];
+        if ($items->isEmpty()) {
+            return '<div class="alert alert-warning">No items found for this record.</div>';
+        }
+        
+        $html = '<div class="table-responsive"><table class="table table-bordered table-striped table-sm">';
+        $html .= '<thead class="table-dark"><tr>';
+        
+        $headers = ['S.No', 'Tour Number', 'Invoice Number', 'Client Name', 'Type', 'Start Date', 'End Date', 
+                   'Credit Type', 'Agent Name', 'Description', 'Amount (USD)', 'Exchange Rate', 'Amount (Local)', 'Remarks'];
+        
+        foreach ($headers as $header) {
+            $html .= '<th>' . htmlspecialchars($header) . '</th>';
+        }
+        $html .= '</tr></thead><tbody>';
+        
         $sno = 1;
-
-        // 1. INVOICE row
-        if ($totalTourCost > 0) {
-            $allItems[] = [
-                $sno++,
-                $tourRef ?? '-',
-                $invoiceNumber ?? '-',
-                'INVOICE',
-                $travelDates['start'],
-                $travelDates['end'],
-                'Credit',
-                $agentName,
-                '-',
-                $totalTourCost,
-                $exchangeRate,
-                round($totalTourCost * $exchangeRate, 2),
-                "Pax: {$totalPax}, Nights: {$totalNights}"
-            ];
+        foreach ($items as $item) {
+            $html .= '<tr>';
+            $html .= '<td>' . $sno++ . '</td>';
+            $html .= '<td>' . ($record->tour_ref ?? '-') . '</td>';
+            $html .= '<td>' . ($record->invoice_number ?? '-') . '</td>';
+            $html .= '<td>' . ($item->client_name ?? $record->vendor_name ?? '') . '</td>';
+            $html .= '<td>' . $item->type . '</td>';
+            $html .= '<td>' . ($item->start_date ?? $record->start_date ?? '') . '</td>';
+            $html .= '<td>' . ($item->end_date ?? $record->end_date ?? '') . '</td>';
+            $html .= '<td>' . ($item->credit_type ?? 'Credit') . '</td>';
+            $html .= '<td>' . ($record->agent_name ?? '-') . '</td>';
+            
+            // Description - use service_name
+            $description = $item->service_name ?? $item->type;
+            if ($item->type == 'HOTEL' && empty($description)) {
+                $description = $item->hotel_name ?? $item->type;
+            }
+            $html .= '<td>' . htmlspecialchars($description) . '</td>';
+            
+            $amount = $item->amount_original;
+            if ($item->type != 'INVOICE') {
+                $amount = -abs($amount);
+            }
+            $html .= '<td>' . ($amount >= 0 ? number_format($amount, 2) : '(' . number_format(abs($amount), 2) . ')') . '</td>';
+            $html .= '<td>' . $exchangeRate . '</td>';
+            $html .= '<td>' . number_format($amount * $exchangeRate, 2) . '</td>';
+            
+            $itemDetails = json_decode($item->item_details, true);
+            $remarks = '';
+            if ($item->type == 'INVOICE') {
+                $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+            } elseif ($item->type == 'HOTEL') {
+                $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+            } else {
+                $remarks = $itemDetails['remarks'] ?? '';
+            }
+            $html .= '<td>' . htmlspecialchars($remarks) . '</td>';
+            $html .= '</tr>';
         }
-
-        // 2. HOTEL rows
-        foreach ($hotels as $hotel) {
-            $allItems[] = [
-                $sno++,
-                $tourRef ?? '-',
-                $invoiceNumber ?? '-',
-                'HOTEL',
-                $travelDates['start'],
-                $travelDates['end'],
-                'Credit',
-                $agentName,
-                $hotel['name'],
-                $hotel['amount'],
-                $exchangeRate,
-                round($hotel['amount'] * $exchangeRate, 2),
-                ($hotel['nights'] ?? 1) . ' nights'
-            ];
-        }
-
-        // 3. TRANSPORT row
-        if ($transportTotal > 0) {
-            $allItems[] = [
-                $sno++,
-                $tourRef ?? '-',
-                $invoiceNumber ?? '-',
-                'TRANSPORT',
-                $travelDates['start'],
-                $travelDates['end'],
-                'Credit',
-                $agentName,
-                '-',
-                $transportTotal,
-                $exchangeRate,
-                round($transportTotal * $exchangeRate, 2),
-                'Total transport expenses'
-            ];
-        }
-
-        // 4. TOUR TRANSFER row
-        if ($tourTransfersTotal > 0) {
-            $allItems[] = [
-                $sno++,
-                $tourRef ?? '-',
-                $invoiceNumber ?? '-',
-                'TOUR TRANSFER',
-                $travelDates['start'],
-                $travelDates['end'],
-                'Credit',
-                $agentName,
-                '-',
-                $tourTransfersTotal,
-                $exchangeRate,
-                round($tourTransfersTotal * $exchangeRate, 2),
-                'Total tour transfer expenses'
-            ];
-        }
-
-        // 5. ATTRACTION row
-        if ($attractionTotal > 0) {
-            $allItems[] = [
-                $sno++,
-                $tourRef ?? '-',
-                $invoiceNumber ?? '-',
-                'ATTRACTION',
-                $travelDates['start'],
-                $travelDates['end'],
-                'Credit',
-                $agentName,
-                '-',
-                $attractionTotal,
-                $exchangeRate,
-                round($attractionTotal * $exchangeRate, 2),
-                'Total attraction & entrance fees'
-            ];
-        }
-
-        if (empty($allItems)) {
-            return [
-                'success' => false,
-                'message' => 'No items found to insert'
-            ];
-        }
-
-        // Update Google Sheets
-        $googleSheets = new GoogleSheetsService();
         
-        // Headers
-        $headers = array_values($this->excelColumns);
+        // Profit/Loss row
+        if ($record->profit_loss !== null) {
+            $pl = $record->profit_loss;
+            $html .= '<tr style="background-color: #FFF3CD; font-weight: bold;">';
+            $html .= '<td></td>';
+            $html .= '<td>' . ($record->tour_ref ?? '-') . '</td>';
+            $html .= '<td>' . ($record->invoice_number ?? '-') . '</td>';
+            $html .= '<td></td>';
+            $html .= '<td>PROFIT / (LOSS)</td>';
+            $html .= '<td></td><td></td><td></td>';
+            $html .= '<td>' . ($record->agent_name ?? '-') . '</td>';
+            $html .= '<td></td>';
+            $html .= '<td>' . ($pl >= 0 ? number_format($pl, 2) : '(' . number_format(abs($pl), 2) . ')') . '</td>';
+            $html .= '<td>' . $exchangeRate . '</td>';
+            $html .= '<td>' . number_format($pl * $exchangeRate, 2) . '</td>';
+            $html .= '<td>' . ($pl >= 0 ? 'Profit' : 'Loss') . '</td>';
+            $html .= '</tr>';
+        }
         
-        // Get sheet name based on country
-        $sheetName = $this->getSheetNameForCountry($countryCode);
+        $html .= '</tbody></table></div>';
+        return $html;
         
-        // Ensure headers exist
-        $googleSheets->ensureHeaders($headers, $sheetName);
-        
-        // Append rows
-        $rowsUpdated = $googleSheets->appendRows($allItems, $sheetName);
-
-        // Update the record
-        $record->update([
-            'tour_ref' => $tourRef,
-            'agent_name' => $agentName,
-            'start_date' => $travelDates['start'],
-            'end_date' => $travelDates['end'],
-            'amount' => $totalTourCost,
-            'exchange_rate_used' => $exchangeRate,
-            'currency' => $this->getCurrencyCode($countryCode),
-            'country_code' => $countryCode,
-            'status' => 'approved',
-            'processing_status' => 'completed'
-        ]);
-
-        return [
-            'success' => true,
-            'items_count' => count($allItems),
-            'hotels_count' => count($hotels),
-            'rows_updated' => $rowsUpdated,
-            'sheet_name' => $sheetName
-        ];
-
     } catch (\Exception $e) {
-        Log::error('Google Sheets processing failed: ' . $e->getMessage());
-        return ['success' => false, 'message' => 'Error: ' . $e->getMessage()];
+        Log::error('Record preview error: ' . $e->getMessage());
+        return '<div class="alert alert-danger">Error loading record: ' . $e->getMessage() . '</div>';
     }
-}
-
-/**
- * Get sheet name based on country code
- */
-private function getSheetNameForCountry($countryCode)
-{
-    $sheets = [
-        'LK' => 'Sri Lanka PnL',
-        'VN' => 'Vietnam PnL',
-        'SG' => 'Singapore PnL',
-        'MY' => 'Malaysia PnL',
-    ];
-    
-    return $sheets[$countryCode] ?? 'Master PnL';
 }
 }
