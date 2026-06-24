@@ -9,7 +9,7 @@
                 <a href="{{ route('reports.index') }}" class="btn btn-secondary btn-sm">
                     <i class="fas fa-arrow-left me-1"></i> Back
                 </a>
-                <a href="{{ route('reports.export.month-wise', ['month' => $month, 'year' => $year]) }}" 
+                <a href="{{ route('reports.export.month-wise', ['month' => $month, 'year' => $year, 'date' => $selectedDate ?? '']) }}" 
                    class="btn btn-success btn-sm">
                     <i class="fas fa-file-excel me-1"></i> Export Excel
                 </a>
@@ -18,22 +18,28 @@
         <div class="card-body">
             <!-- Summary Cards -->
             <div class="row mb-4">
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <div class="stat-card">
                         <div class="stat-title">Total Invoices</div>
                         <h3 class="stat-value">{{ $summary['total_invoices'] }}</h3>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <div class="stat-card">
                         <div class="stat-title">Total Amount</div>
                         <h3 class="stat-value">{{ $summary['currency'] }} {{ number_format($summary['total_amount'], 2) }}</h3>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <div class="stat-card">
                         <div class="stat-title">Month</div>
                         <h3 class="stat-value">{{ $summary['month_name'] }}</h3>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="stat-card">
+                        <div class="stat-title">Selected Date</div>
+                        <h3 class="stat-value">{{ $summary['selected_date'] ?? 'All' }}</h3>
                     </div>
                 </div>
             </div>
@@ -59,57 +65,69 @@
                             @endfor
                         </select>
                     </div>
-                    <div class="col-md-2 d-flex align-items-end">
-                        <button type="submit" class="btn btn-primary">Apply</button>
+                    <div class="col-md-3">
+                        <label class="form-label">Specific Date <small class="text-muted">(Optional)</small></label>
+                        <input type="date" name="date" class="form-control" value="{{ $selectedDate ?? '' }}">
+                        <small class="text-muted">Leave empty to show all dates in month</small>
+                    </div>
+                    <div class="col-md-3 d-flex align-items-end">
+                        <button type="submit" class="btn btn-primary me-2">
+                            <i class="fas fa-search me-1"></i> Apply
+                        </button>
+                        <a href="{{ route('reports.month-wise', ['month' => $month, 'year' => $year]) }}" class="btn btn-secondary">
+                            <i class="fas fa-times me-1"></i> Clear Date
+                        </a>
                     </div>
                 </form>
             </div>
 
-            <!-- Table -->
-            <div class="table-responsive">
-                <table class="table table-bordered table-striped table-hover">
-                    <thead class="table-dark">
-                        <tr>
-                            <th>Month</th>
-                            <th>Date</th>
-                            <th>Invoice #</th>
-                            <th>CNTL</th>
-                            <th>Agent Name</th>
-                            <th>Guest Name</th>
-                            <th>Amount</th>
-                            <th>Currency</th>
-                            <th>File Handler</th>
-                            <th>Tour Start Date</th>
-                            <th>Travel Date</th>
-                            <th>Sales Person</th>
-                            <th>GST No</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @forelse($reportData as $row)
-                            <tr>
-                                <td>{{ $row['month'] }}</td>
-                                <td>{{ $row['date'] }}</td>
-                                <td><strong>{{ $row['invoice_number'] }}</strong></td>
-                                <td>{{ $row['tour_ref'] }}</td>
-                                <td>{{ $row['agent_name'] }}</td>
-                                <td>{{ $row['guest_name'] }}</td>
-                                <td>{{ $row['currency'] }} {{ number_format($row['amount'], 2) }}</td>
-                                <td>{{ $row['currency'] }}</td>
-                                <td>{{ $row['file_handler'] }}</td>
-                                <td>{{ $row['tour_start_date'] }}</td>
-                                <td>{{ $row['travel_date'] }}</td>
-                                <td>{{ $row['sales_person'] }}</td>
-                                <td>{{ $row['gst_no'] }}</td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="13" class="text-center">No invoices found for this month</td>
-                            </tr>
-                        @endforelse
-                    </tbody>
-                </table>
-            </div>
+          <!-- Table -->
+<div class="table-responsive">
+    <table class="table table-bordered table-striped table-hover">
+        <thead class="table-dark">
+            <tr>
+                <th style="width: 60px;">S.No</th>  <!-- ✅ New column -->
+                <th>Month</th>
+                <th>Generated Date</th>
+                <th>Invoice #</th>
+                <th>CNTL</th>
+                <th>Agent Name</th>
+                <th>Guest Name</th>
+                <th>Amount</th>
+                <th>Currency</th>
+                <th>File Handler</th>
+                <th>Tour Start Date</th>
+                <th>Travel Date</th>
+                <th>Sales Person</th>
+                <th>GST No</th>
+            </tr>
+        </thead>
+        <tbody>
+            @forelse($reportData as $row)
+                <tr>
+                    <td><strong>{{ $row['sno'] }}</strong></td>  <!-- ✅ Display S.No -->
+                    <td>{{ $row['month'] }}</td>
+                    <td>{{ $row['date'] }}</td>
+                    <td><strong>{{ $row['invoice_number'] }}</strong></td>
+                    <td>{{ $row['tour_ref'] }}</td>
+                    <td>{{ $row['agent_name'] }}</td>
+                    <td>{{ $row['guest_name'] }}</td>
+                    <td>{{ $row['currency'] }} {{ number_format($row['amount'], 2) }}</td>
+                    <td>{{ $row['currency'] }}</td>
+                    <td>{{ $row['file_handler'] }}</td>
+                    <td>{{ $row['tour_start_date'] }}</td>
+                    <td>{{ $row['travel_date'] }}</td>
+                    <td>{{ $row['sales_person'] }}</td>
+                    <td>{{ $row['gst_no'] }}</td>
+                </tr>
+            @empty
+                <tr>
+                    <td colspan="14" class="text-center">No invoices found for this selection</td>
+                </tr>
+            @endforelse
+        </tbody>
+    </table>
+</div>
         </div>
     </div>
 </div>

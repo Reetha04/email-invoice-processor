@@ -188,12 +188,7 @@ public function fetchAllEmails()
         $messageId = $message['id'];
         $subject = $message['subject'] ?? 'NO SUBJECT';
         
-        // ✅ Double-check if already exists (to avoid race conditions)
-        if (IncomingEmail::where('message_id', $messageId)->exists()) {
-            Log::info("⏭️ Email already exists (double-check): " . $subject);
-            return true;
-        }
-        
+     
         // ✅ Try to fetch full message
         $fullMessage = $this->fetchFullMessage($messageId);
         
@@ -275,15 +270,13 @@ protected function saveEmail($message)
         $travelStart = $travelDates['start'];
         $travelEnd = $travelDates['end'];
         
-        // ✅ FIX: ONLY extract Total Tour Cost with better patterns
+        // Extract Total Tour Cost
         $totalAmount = null;
         $currency = 'USD';
         
         Log::info("🔍 Extracting Total Tour Cost from email: " . $subject);
-        Log::info("📄 Plain text preview: " . substr($plainText, 0, 500));
         
-        // ✅ PATTERN 1: Total Tour Cost with RM (Malaysia) - MUST CHECK FIRST
-        // Matches: "Total Tour Cost | RM 3,197.00" or "Total Tour Cost RM 3,197.00"
+        // ✅ PATTERN 1: Total Tour Cost with RM (Malaysia)
         if (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*RM\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
             $totalAmount = floatval(str_replace(',', '', $match[1]));
             $currency = 'MYR';
@@ -307,10 +300,9 @@ protected function saveEmail($message)
             $currency = 'SGD';
             Log::info("✅ Extracted Total Tour Cost (SGD): SGD {$totalAmount}");
         }
-        // ✅ PATTERN 5: Total Tour Cost with $ (USD) - but check if it's Singapore (has S$)
+        // ✅ PATTERN 5: Total Tour Cost with $ (USD)
         elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
             $totalAmount = floatval(str_replace(',', '', $match[1]));
-            // Check if this is Singapore (look for S$ or Singapore in text)
             if (stripos($plainText, 'S$') !== false || stripos($plainText, 'SGD') !== false || stripos($plainText, 'Singapore') !== false) {
                 $currency = 'SGD';
             } else {
@@ -318,38 +310,24 @@ protected function saveEmail($message)
             }
             Log::info("✅ Extracted Total Tour Cost: {$currency} {$totalAmount}");
         }
-        // ✅ PATTERN 6: Total Tour Cost with currency code (generic)
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*([A-Z]{3})?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[2]));
-            if (isset($match[1]) && !empty($match[1])) {
-                $currency = strtoupper($match[1]);
-            } else {
-                $currency = $this->detectCurrencyFromText($plainText);
-            }
-            Log::info("✅ Extracted Total Tour Cost (generic): {$currency} {$totalAmount}");
-        }
         
         // ✅ If still no amount, try ANY amount with currency symbols
         if (!$totalAmount) {
-            // Try RM (Malaysia)
             if (preg_match('/RM\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
                 $totalAmount = floatval(str_replace(',', '', $match[1]));
                 $currency = 'MYR';
                 Log::info("✅ Found RM amount: {$currency} {$totalAmount}");
             }
-            // Try S$ (Singapore)
             elseif (preg_match('/S\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
                 $totalAmount = floatval(str_replace(',', '', $match[1]));
                 $currency = 'SGD';
                 Log::info("✅ Found S$ amount: {$currency} {$totalAmount}");
             }
-            // Try SGD
             elseif (preg_match('/SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
                 $totalAmount = floatval(str_replace(',', '', $match[1]));
                 $currency = 'SGD';
                 Log::info("✅ Found SGD amount: {$currency} {$totalAmount}");
             }
-            // Try USD
             elseif (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
                 $totalAmount = floatval(str_replace(',', '', $match[1]));
                 $currency = 'USD';
@@ -357,58 +335,43 @@ protected function saveEmail($message)
             }
         }
         
-// ✅ EXTRACT NUMBER OF GUESTS - FIXED to count ALL guests (Adults + Children)
-$numberOfGuests = null;
-$adults = 0;
-$cwbCount = 0;
-$cnbCount = 0;
+        // Extract number of guests
+        $numberOfGuests = null;
+        $adults = 0;
+        $cwbCount = 0;
+        $cnbCount = 0;
 
-Log::info("🔍 Extracting guest count from email");
+        Log::info("🔍 Extracting guest count from email");
 
-// ✅ PATTERN 1: "4 Adults | 3 CWB | 0 CNB" (full format)
-if (preg_match('/(\d+)\s+Adults?\s*[|\s]*(\d+)\s+CWB\s*[|\s]*(\d+)\s+CNB/i', $plainText, $match)) {
-    $adults = intval($match[1]);
-    $cwbCount = intval($match[2]);
-    $cnbCount = intval($match[3]);
-    $numberOfGuests = $adults + $cwbCount + $cnbCount;
-    Log::info("✅ Guests: {$adults} Adults + {$cwbCount} CWB + {$cnbCount} CNB = {$numberOfGuests} Total");
-}
-// ✅ PATTERN 2: "4 Adults | 3 CWB" (no CNB)
-elseif (preg_match('/(\d+)\s+Adults?\s*[|\s]*(\d+)\s+CWB/i', $plainText, $match)) {
-    $adults = intval($match[1]);
-    $cwbCount = intval($match[2]);
-    $numberOfGuests = $adults + $cwbCount;
-    Log::info("✅ Guests: {$adults} Adults + {$cwbCount} CWB = {$numberOfGuests} Total");
-}
-// ✅ PATTERN 3: "No. of Guests | 4 Adults | 3 CWB"
-elseif (preg_match('/No\.?\s+of\s+Guests?\s*[:\|]\s*(\d+)\s+Adults?\s*[|\s]*(\d+)\s+CWB/i', $plainText, $match)) {
-    $adults = intval($match[1]);
-    $cwbCount = intval($match[2]);
-    $numberOfGuests = $adults + $cwbCount;
-    Log::info("✅ Guests (with label): {$adults} Adults + {$cwbCount} CWB = {$numberOfGuests} Total");
-}
-// ✅ PATTERN 4: Just "No. of Guests: 4" (old format)
-elseif (preg_match('/No\.?\s+of\s+Guests?\s*[:\s]*(\d+)/i', $plainText, $match)) {
-    $numberOfGuests = intval($match[1]);
-    Log::info("✅ Guests (simple): {$numberOfGuests}");
-}
-// ✅ PATTERN 5: "4 Adults" only
-elseif (preg_match('/(\d+)\s+Adults?/i', $plainText, $match)) {
-    $adults = intval($match[1]);
-    $numberOfGuests = $adults;
-    Log::info("✅ Guests (adults only): {$numberOfGuests}");
-}
+        if (preg_match('/(\d+)\s+Adults?\s*[|\s]*(\d+)\s+CWB\s*[|\s]*(\d+)\s+CNB/i', $plainText, $match)) {
+            $adults = intval($match[1]);
+            $cwbCount = intval($match[2]);
+            $cnbCount = intval($match[3]);
+            $numberOfGuests = $adults + $cwbCount + $cnbCount;
+            Log::info("✅ Guests: {$adults} Adults + {$cwbCount} CWB + {$cnbCount} CNB = {$numberOfGuests} Total");
+        }
+        elseif (preg_match('/(\d+)\s+Adults?\s*[|\s]*(\d+)\s+CWB/i', $plainText, $match)) {
+            $adults = intval($match[1]);
+            $cwbCount = intval($match[2]);
+            $numberOfGuests = $adults + $cwbCount;
+            Log::info("✅ Guests: {$adults} Adults + {$cwbCount} CWB = {$numberOfGuests} Total");
+        }
+        elseif (preg_match('/No\.?\s+of\s+Guests?\s*[:\s]*(\d+)/i', $plainText, $match)) {
+            $numberOfGuests = intval($match[1]);
+            Log::info("✅ Guests (simple): {$numberOfGuests}");
+        }
+        elseif (preg_match('/(\d+)\s+Adults?/i', $plainText, $match)) {
+            $adults = intval($match[1]);
+            $numberOfGuests = $adults;
+            Log::info("✅ Guests (adults only): {$numberOfGuests}");
+        }
 
-// ✅ PAX Count = Total number of guests (Adults + Children)
-$paxCount = $numberOfGuests;
-if ($paxCount) {
-    Log::info("✅ PAX Count set to: {$paxCount}");
-}
+        $paxCount = $numberOfGuests;
         
         $destination = $this->extractDestination($plainText, $subject);
         $classification = $this->agentClassifier->classify($plainText, $fromEmail, $subject, $agentName);
         
-        // ✅ Build email data with ALL fields including sales_person
+        // ✅ BUILD EMAIL DATA - NO DUPLICATE CHECKS, SAVE EVERYTHING
         $emailData = [
             'message_id' => $message['id'],
             'from_email' => $fromEmail ?: 'unknown@example.com',
@@ -436,31 +399,35 @@ if ($paxCount) {
             'processing_status' => 'processed',
             'is_tour_confirmation' => $isTourConfirmation,
             'has_attachments' => $message['hasAttachments'] ?? false,
-            'sales_person' => $salesPerson, // ✅ ADDED SALES PERSON
+            'sales_person' => $salesPerson,
         ];
         
         Log::info("💾 FINAL - Total amount: {$currency} {$totalAmount} for: " . $subject);
         Log::info("💾 Sales Person: " . ($salesPerson ?: 'NULL'));
         
         try {
+            // ✅ FORCE SAVE - No duplicate checks!
             $email = IncomingEmail::create($emailData);
             Log::info("💾 Saved email to database: " . $subject . " (ID: " . $email->id . ")");
+            
+            // ✅ Auto-generate invoice
+            if ($isTourConfirmation && $tourRef != 'NA' && $invoiceNumber != 'NA') {
+                $this->autoGenerateInvoice($email);
+            }
+            
+            // ✅ Save attachments if any
+            if (isset($message['attachments']) && !empty($message['attachments'])) {
+                $this->saveAttachments($message['attachments'], $email);
+            }
+            
+            Log::info("✅ Successfully saved email: " . $subject);
+            return true;
+            
         } catch (\Illuminate\Database\QueryException $qe) {
             Log::error('❌ Database error: ' . $qe->getMessage() . ' - Subject: ' . $subject);
             Log::error('   Data: ' . json_encode($emailData, JSON_PARTIAL_OUTPUT_ON_ERROR));
             return false;
         }
-        
-        if ($isTourConfirmation && $tourRef != 'NA' && $invoiceNumber != 'NA') {
-            $this->autoGenerateInvoice($email);
-        }
-        
-        if (isset($message['attachments']) && !empty($message['attachments'])) {
-            $this->saveAttachments($message['attachments'], $email);
-        }
-        
-        Log::info("✅ Successfully saved email: " . $subject);
-        return true;
         
     } catch (\Exception $e) {
         Log::error('❌ Save failed: ' . $e->getMessage() . ' - Subject: ' . ($message['subject'] ?? 'N/A'));

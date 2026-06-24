@@ -119,16 +119,16 @@
                 <div class="filter-section mb-4">
                     <form method="GET" action="{{ route('index') }}" id="filterForm">
                         <div class="row g-3">
-                            <div class="col-md-4">
-                                <label class="form-label">Search</label>
-                                <div class="input-group">
-                                    <span class="input-group-text bg-white border-end-0">
-                                        <i class="fas fa-search text-secondary"></i>
-                                    </span>
-                                    <input type="text" name="search" class="form-control border-start-0"
-                                        placeholder="Subject, email, agent, guest..." value="{{ request('search') }}">
-                                </div>
-                            </div>
+                           <div class="col-md-4">
+    <label class="form-label">Search</label>
+    <div class="input-group">
+        <span class="input-group-text bg-white border-end-0">
+            <i class="fas fa-search text-secondary"></i>
+        </span>
+        <input type="text" name="search" class="form-control border-start-0"
+            placeholder="Invoice #, Tour Ref, Agent, File Handler, Sales Person..." value="{{ request('search') }}">
+    </div>
+</div>
 
                             <div class="col-md-2">
                                 <label class="form-label">Credit Type</label>

@@ -15,253 +15,232 @@ class InvoiceGenerationService
 {
     private $revisionCounters = [];
 
-public function generateFromEmail($email, $classification = null, $revisionNumber = null)
-{
-    if (!$classification) {
-        $agentClassifier = new AgentClassificationService();
-        $classification = $agentClassifier->classify(
-            $email->body ?? '', 
-            $email->from_email ?? '', 
-            $email->subject ?? '', 
-            $email->agent_name
-        );
-    }
+    public function generateFromEmail($email, $classification = null, $revisionNumber = null)
+    {
+        if (!$classification) {
+            $agentClassifier = new AgentClassificationService();
+            $classification = $agentClassifier->classify(
+                $email->body ?? '', 
+                $email->from_email ?? '', 
+                $email->subject ?? '', 
+                $email->agent_name
+            );
+        }
 
-    $gstNumber = null;
-    if ($email->agent_name) {
-        $agentName = trim($email->agent_name);
+        // ✅ Get classification properties
+        $hasHandlingFee = $classification['has_handling_fee'] ?? false;
+        $invoiceCurrency = $classification['currency'] ?? 'USD';
+        $invoiceFormat = $classification['invoice_format'] ?? 'apple_holidays';
         
-        $agentGst = AgentGst::whereRaw('LOWER(agent_name) = LOWER(?)', [$agentName])->first();
+        Log::info("💰 Classification: Currency={$invoiceCurrency}, HasHandlingFee=" . ($hasHandlingFee ? 'Yes' : 'No'));
+
+        // Get GST and Sales Person
+        $gstNumber = null;
+        if ($email->agent_name) {
+            $agentName = trim($email->agent_name);
+            $agentGst = AgentGst::whereRaw('LOWER(agent_name) = LOWER(?)', [$agentName])->first();
+            if (!$agentGst) {
+                $searchName = preg_replace('/\s+(AGENT|TRAVEL|TOURS|PVT|LTD|PRIVATE|LIMITED|LLP|HOLIDAYS|INTERNATIONAL|SOLUTIONS)/i', '', $agentName);
+                $searchName = trim($searchName);
+                $agentGst = AgentGst::whereRaw('LOWER(agent_name) LIKE ?', ['%' . strtolower($searchName) . '%'])->first();
+            }
+            if ($agentGst) {
+                $gstNumber = $agentGst->gst_number;
+            }
+        }
+
+        $salesPerson = $email->sales_person ?? null;
+
+        // Get base invoice number
+        $baseInvoiceNumber = $email->invoice_number;
+        $cleanBase = $this->cleanBaseNumber($baseInvoiceNumber);
         
-        if (!$agentGst) {
-            $searchName = preg_replace('/\s+(AGENT|TRAVEL|TOURS|PVT|LTD|PRIVATE|LIMITED|LLP|HOLIDAYS|INTERNATIONAL|SOLUTIONS)/i', '', $agentName);
-            $searchName = trim($searchName);
-            $agentGst = AgentGst::whereRaw('LOWER(agent_name) LIKE ?', ['%' . strtolower($searchName) . '%'])->first();
+        // Check existing invoices
+        $existingInvoices = GeneratedInvoice::where('original_invoice_number', $cleanBase)
+            ->orWhere('invoice_number', 'LIKE', $cleanBase . '%')
+            ->orderBy('id', 'asc')
+            ->get();
+        
+        $totalRevisions = $existingInvoices->count();
+        
+        // Determine invoice number
+        if ($totalRevisions == 0) {
+            $displayInvoiceNumber = $cleanBase;
+            $fileInvoiceNumber = $cleanBase;
+            $currentRevision = 0;
+            $totalRevisionsCount = 0;
+            $isRevision = false;
+            $newTotal = 0;
+        } else {
+            $existingForEmail = $existingInvoices->where('email_id', $email->id)->first();
+            if ($existingForEmail) {
+                Log::info("⏭️ Invoice {$cleanBase} already exists for this email. Returning existing.");
+                return $existingForEmail;
+            }
+            $isRevision = true;
+            $newTotal = $totalRevisions + 1;
+            $currentRevision = $newTotal;
+            $displayInvoiceNumber = $cleanBase . '_R' . $currentRevision . '/R' . $newTotal;
+            $fileInvoiceNumber = $cleanBase . '_R' . $currentRevision . '_R' . $newTotal;
+            $this->updatePreviousRevisions($cleanBase, $newTotal);
         }
         
-        if ($agentGst) {
-            $gstNumber = $agentGst->gst_number;
+        // Create directory
+        $directory = storage_path('app/public/invoices');
+        if (!File::exists($directory)) {
+            File::makeDirectory($directory, 0755, true);
         }
-    }
-
-    $salesPerson = $email->sales_person ?? null;
-
-    // ✅ Get base invoice number
-    $baseInvoiceNumber = $email->invoice_number;
-    $cleanBase = $this->cleanBaseNumber($baseInvoiceNumber);
-    
-    // ✅ Check if ANY invoice with this base number exists
-    $existingInvoices = GeneratedInvoice::where('original_invoice_number', $cleanBase)
-        ->orWhere('invoice_number', 'LIKE', $cleanBase . '%')
-        ->orderBy('id', 'asc')
-        ->get();
-    
-    $totalRevisions = $existingInvoices->count();
-    
-// ✅ Determine the invoice number
-if ($totalRevisions == 0) {
-    $displayInvoiceNumber = $cleanBase;
-    $fileInvoiceNumber = $cleanBase;
-    $currentRevision = 0;
-    $totalRevisionsCount = 0;
-    $isRevision = false;
-    $newTotal = 0;
-} else {
-    $existingForEmail = $existingInvoices->where('email_id', $email->id)->first();
-    
-    if ($existingForEmail) {
-        Log::info("⏭️ Invoice {$cleanBase} already exists for this email. Returning existing.");
-        return $existingForEmail;
-    }
-    
-    $isRevision = true;
-    $newTotal = $totalRevisions + 1;
-    $currentRevision = $newTotal;
-    
-    // ✅ DISPLAY format: IS48329_R2/R2 (for UI)
-    $displayInvoiceNumber = $cleanBase . '_R' . $currentRevision . '/R' . $newTotal;
-    
-    // ✅ FILE format: IS48329_R2_R2 (for filename - NO slashes)
-    $fileInvoiceNumber = $cleanBase . '_R' . $currentRevision . '_R' . $newTotal;
-    
-    $this->updatePreviousRevisions($cleanBase, $newTotal);
-    
-    Log::info("📄 Revision detected: New total = {$newTotal}, Current = {$currentRevision}");
-    Log::info("📄 Display: {$displayInvoiceNumber}, File: {$fileInvoiceNumber}");
-}
-    
-    // Create directory
-    $directory = storage_path('app/public/invoices');
-    if (!File::exists($directory)) {
-        File::makeDirectory($directory, 0755, true);
-    }
-    
-    // ✅ STEP 1: Get HTML body and plain text
-    $htmlBody = $email->body ?? '';
-    $plainText = $this->htmlToPlainText($htmlBody);
-    
-    // ✅ STEP 2: Get the currency and amount from email
-    $currency = $email->currency ?? 'USD';
-    $originalAmount = $email->total_amount ?? 0;
-    
-    Log::info("💰 Original Amount: {$originalAmount} {$currency}");
-    
-    // ✅ STEP 3: Get the correct exchange rate based on currency
-    $exchangeService = new ExchangeRateService();
-    $exchangeRate = null;
-    
-    switch ($currency) {
-        case 'MYR':
-            $exchangeRate = $exchangeService->getMyrToInrRate(); // 22.82 + 1 = 23.82
-            Log::info("🇲🇾 Using MYR to INR rate: {$exchangeRate}");
-            break;
-        case 'SGD':
-            $exchangeRate = $exchangeService->getSgdToInrRate(); // 62.00 + 1 = 63.00
-            Log::info("🇸🇬 Using SGD to INR rate: {$exchangeRate}");
-            break;
-        case 'USD':
-        default:
-            $exchangeRate = $exchangeService->getUsdToInrRate(); // 83.50 + 1 = 84.50
-            Log::info("🇺🇸 Using USD to INR rate: {$exchangeRate}");
-            break;
-    }
-    
-    $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
-    if ($totalGuests < 1) {
-        $totalGuests = 1;
-    }
-    
-    // ✅ STEP 4: Calculate correctly
-    $hasHandlingFee = $classification['has_handling_fee'] ?? false;
-    $invoiceFormat = $classification['invoice_format'] ?? 'apple_holidays';
-    
-    if (!$hasHandlingFee) {
-        // ✅ NO Handling Fee - Direct conversion
-        $totalAmountINR = $originalAmount * $exchangeRate;
-        $handlingFee = 0;
-        $grandTotal = $totalAmountINR;
-        $currency = 'INR';
-        $calculations = null;
         
-        Log::info("✅ No handling fee: {$originalAmount} {$email->currency} × {$exchangeRate} = {$totalAmountINR} INR");
+        // Get email data
+        $htmlBody = $email->body ?? '';
+        $plainText = $this->htmlToPlainText($htmlBody);
         
-    } else {
-    // ✅ WITH Handling Fee - CORRECTED CALCULATION
-    
-    // ✅ Handling fee is ALWAYS 5 in the email's currency
-    // For USD: $5 per person
-    // For MYR: RM 5 per person
-    // For SGD: SGD 5 per person
-    $handlingFeePerPersonOriginalCurrency = 5;
-    
-    Log::info("💵 Handling fee per person in {$currency}: {$handlingFeePerPersonOriginalCurrency}");
-    
-    // ✅ Per person in original currency
-    $perPersonOriginal = $originalAmount / $totalGuests;
-    
-    // ✅ Unit Fare / Cost Per Person = Per Person - Handling Fee
-    $unitFareOriginal = $perPersonOriginal - $handlingFeePerPersonOriginalCurrency;
-    
-    // ✅ Convert to INR
-    $perPersonINR = $perPersonOriginal * $exchangeRate;
-    $unitFareINR = $unitFareOriginal * $exchangeRate;
-    $totalAmountINR = $originalAmount * $exchangeRate;
-    $handlingFeePerPersonINR = $handlingFeePerPersonOriginalCurrency * $exchangeRate;
-    $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
-    
-    // ✅ Sub total (Tour cost + Handling fee) - same as original total in INR
-    $subTotalINR = $totalAmountINR;
-    
-    // ✅ GST on handling fee only
-    $cgstPercent = $email->cgst_percent ?? 9;
-    $sgstPercent = $email->sgst_percent ?? 9;
-    $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
-    $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
-    
-    // ✅ Grand Total = Tour Cost + GST on Handling Fee
-    $grandTotal = $totalAmountINR + $cgst + $sgst;
-    $handlingFee = $totalHandlingFeeINR;
-    $currency = 'INR';
-    
-    $calculations = [
-        'original_amount' => $originalAmount,
-        'original_currency' => $email->currency,
-        'total_guests' => $totalGuests,
-        'per_person_original' => $perPersonOriginal,
-        'per_person_inr' => $perPersonINR,
-        'handling_fee_per_person_original' => $handlingFeePerPersonOriginalCurrency,
-        'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
-        'total_handling_fee_inr' => $totalHandlingFeeINR,
-        'unit_fare_original' => $unitFareOriginal,
-        'unit_fare_inr' => $unitFareINR,
-        'exchange_rate' => $exchangeRate,
-        'total_amount_inr' => $totalAmountINR,
-        'sub_total_inr' => $subTotalINR,
-        'cgst_percent' => $cgstPercent,
-        'cgst_amount' => $cgst,
-        'sgst_percent' => $sgstPercent,
-        'sgst_amount' => $sgst,
-        'final_total_inr' => $grandTotal,
-        'gst_number' => $gstNumber,
-        'sales_person' => $salesPerson,
-        'detected_currency' => $email->currency,
-    ];
-    
-    Log::info("✅ With handling fee:");
-    Log::info("   Original: {$originalAmount} {$email->currency}");
-    Log::info("   Per person: {$perPersonOriginal} {$email->currency}");
-    Log::info("   Handling fee per person: {$handlingFeePerPersonOriginalCurrency} {$email->currency}");
-    Log::info("   Unit Fare (Per Person - Fee): {$unitFareOriginal} {$email->currency}");
-    Log::info("   Exchange rate: {$exchangeRate}");
-    Log::info("   Total INR: {$totalAmountINR}");
-    Log::info("   Handling fee INR: {$totalHandlingFeeINR}");
-    Log::info("   CGST: {$cgst}");
-    Log::info("   SGST: {$sgst}");
-    Log::info("   Grand Total: {$grandTotal}");
-}
-    
-    // ✅ Create invoice record
-    $invoice = GeneratedInvoice::create([
-        'email_id' => $email->id,
-        'invoice_number' => $displayInvoiceNumber,
-        'invoice_date' => now()->format('Y-m-d'),
-        'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
-        'guest_name' => $email->guest_name,
-        'tour_ref' => $email->tour_ref,
-        'total_amount' => $originalAmount,
-        'handling_fee' => $handlingFee ?? 0,
-        'grand_total' => $grandTotal,
-        'currency' => $currency,
-        'invoice_type' => $classification['credit_type'],
-        'status' => 'draft',
-        'file_path' => null,
-        'calculations' => $calculations ? json_encode($calculations) : null,
-        'revision_number' => $currentRevision,
-        'total_revisions' => $newTotal,
-        'is_revision' => $isRevision,
-        'original_invoice_number' => $cleanBase,
-        'gst_number' => $gstNumber,
-        'sales_person' => $salesPerson,
-    ]);
-    
-    // Generate PDF based on invoice format
-    if ($invoiceFormat == 'apple_holidays') {
-        $html = $this->generateAppleHolidaysInvoiceHTML($invoice, $email);
-    } else {
-        $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
+        // ✅ DETECT ORIGINAL CURRENCY from email
+        $originalCurrency = $email->currency ?? 'USD';
+        $originalAmount = $email->total_amount ?? 0;
+        
+        Log::info("💰 Original Amount: {$originalAmount} {$originalCurrency}");
+        
+        // ✅ Get exchange rate for INR conversion (only needed if has handling fee)
+        $exchangeService = new ExchangeRateService();
+        $exchangeRate = null;
+        
+        // ✅ CREDIT USD (NO Handling Fee) - Keep in USD
+        if (!$hasHandlingFee) {
+            Log::info("✅ CREDIT USD - No handling fee. Invoice will be in USD.");
+            $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
+            if ($totalGuests < 1) $totalGuests = 1;
+            
+            // ✅ Keep in USD, NO conversion
+            $totalAmount = $originalAmount;
+            $handlingFee = 0;
+            $grandTotal = $originalAmount;
+            $currency = 'USD';  // ← USD
+            $calculations = null;
+            
+            Log::info("✅ Credit USD Invoice: {$originalAmount} USD");
+            
+        } else {
+            // ✅ WITH Handling Fee - Convert to INR
+            Log::info("✅ WITH Handling Fee - Converting to INR");
+            
+            // Get exchange rate based on original currency
+            switch ($originalCurrency) {
+                case 'MYR':
+                    $exchangeRate = $exchangeService->getMyrToInrRate();
+                    Log::info("🇲🇾 Using MYR to INR rate: {$exchangeRate}");
+                    break;
+                case 'SGD':
+                    $exchangeRate = $exchangeService->getSgdToInrRate();
+                    Log::info("🇸🇬 Using SGD to INR rate: {$exchangeRate}");
+                    break;
+                case 'USD':
+                default:
+                    $exchangeRate = $exchangeService->getUsdToInrRate();
+                    Log::info("🇺🇸 Using USD to INR rate: {$exchangeRate}");
+                    break;
+            }
+            
+            $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
+            if ($totalGuests < 1) $totalGuests = 1;
+            
+            // Handling fee is ALWAYS 5 in the email's currency
+            $handlingFeePerPersonOriginalCurrency = 5;
+            
+            // Per person in original currency
+            $perPersonOriginal = $originalAmount / $totalGuests;
+            $unitFareOriginal = $perPersonOriginal - $handlingFeePerPersonOriginalCurrency;
+            
+            // Convert to INR
+            $perPersonINR = $perPersonOriginal * $exchangeRate;
+            $unitFareINR = $unitFareOriginal * $exchangeRate;
+            $totalAmountINR = $originalAmount * $exchangeRate;
+            $handlingFeePerPersonINR = $handlingFeePerPersonOriginalCurrency * $exchangeRate;
+            $totalHandlingFeeINR = $handlingFeePerPersonINR * $totalGuests;
+            $subTotalINR = $totalAmountINR;
+            
+            // GST on handling fee only
+            $cgstPercent = $email->cgst_percent ?? 9;
+            $sgstPercent = $email->sgst_percent ?? 9;
+            $cgst = $totalHandlingFeeINR * ($cgstPercent / 100);
+            $sgst = $totalHandlingFeeINR * ($sgstPercent / 100);
+            $grandTotal = $totalAmountINR + $cgst + $sgst;
+            $handlingFee = $totalHandlingFeeINR;
+            $currency = 'INR';  // ← INR for handling fee invoices
+            $totalAmount = $originalAmount;
+            
+            $calculations = [
+                'original_amount' => $originalAmount,
+                'original_currency' => $originalCurrency,
+                'total_guests' => $totalGuests,
+                'per_person_original' => $perPersonOriginal,
+                'per_person_inr' => $perPersonINR,
+                'handling_fee_per_person_original' => $handlingFeePerPersonOriginalCurrency,
+                'handling_fee_per_person_inr' => $handlingFeePerPersonINR,
+                'total_handling_fee_inr' => $totalHandlingFeeINR,
+                'unit_fare_original' => $unitFareOriginal,
+                'unit_fare_inr' => $unitFareINR,
+                'exchange_rate' => $exchangeRate,
+                'total_amount_inr' => $totalAmountINR,
+                'sub_total_inr' => $subTotalINR,
+                'cgst_percent' => $cgstPercent,
+                'cgst_amount' => $cgst,
+                'sgst_percent' => $sgstPercent,
+                'sgst_amount' => $sgst,
+                'final_total_inr' => $grandTotal,
+                'gst_number' => $gstNumber,
+                'sales_person' => $salesPerson,
+                'detected_currency' => $originalCurrency,
+            ];
+            
+            Log::info("✅ With handling fee - Grand Total: {$grandTotal} INR");
+        }
+        
+        // ✅ Create invoice record with CORRECT currency
+        $invoice = GeneratedInvoice::create([
+            'email_id' => $email->id,
+            'invoice_number' => $displayInvoiceNumber,
+            'invoice_date' => now()->format('Y-m-d'),
+            'customer_name' => $email->agent_name ?? ($email->guest_name ?? 'Unknown Customer'),
+            'guest_name' => $email->guest_name,
+            'tour_ref' => $email->tour_ref,
+            'total_amount' => $totalAmount,
+            'handling_fee' => $handlingFee ?? 0,
+            'grand_total' => $grandTotal,
+            'currency' => $currency,  // ✅ CORRECT CURRENCY (USD or INR)
+            'invoice_type' => $classification['credit_type'],
+            'status' => 'draft',
+            'file_path' => null,
+            'calculations' => $calculations ? json_encode($calculations) : null,
+            'revision_number' => $currentRevision,
+            'total_revisions' => $newTotal,
+            'is_revision' => $isRevision,
+            'original_invoice_number' => $cleanBase,
+            'gst_number' => $gstNumber,
+            'sales_person' => $salesPerson,
+        ]);
+        
+        // Generate PDF based on invoice format
+        if ($invoiceFormat == 'apple_holidays') {
+            $html = $this->generateAppleHolidaysInvoiceHTML($invoice, $email);
+        } else {
+            $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
+        }
+        
+        $pdf = Pdf::loadHTML($html);
+        $filename = "invoices/{$fileInvoiceNumber}.pdf";
+        $pdf->save(storage_path("app/public/{$filename}"));
+        
+        $invoice->file_path = $filename;
+        $invoice->save();
+        
+        Log::info("✅ Created invoice: {$displayInvoiceNumber} in {$currency}");
+        
+        // ✅ Send email
+        $this->sendInvoiceEmail($invoice);
+        
+        return $invoice;
     }
-    
-    $pdf = Pdf::loadHTML($html);
-    $filename = "invoices/{$fileInvoiceNumber}.pdf";
-    $pdf->save(storage_path("app/public/{$filename}"));
-    
-    $invoice->file_path = $filename;
-    $invoice->save();
-    
-    Log::info("✅ Created invoice: {$displayInvoiceNumber}");
-    
-    return $invoice;
-}
 
 /**
  * ✅ Get USD to any currency rate
