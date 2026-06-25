@@ -9,7 +9,7 @@ use App\Services\PnlEmailService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Services\PnLExcelService;
-
+use App\Services\ServiceNameMatcher;
 
 class PnlController extends Controller
 {
@@ -1378,5 +1378,54 @@ private function getCurrencySymbol($countryCode)
     ];
     
     return $symbols[$countryCode] ?? 'USD';
+}
+public function matchServices(Request $request)
+{
+    try {
+        $id = $request->input('id');
+        
+        if ($id) {
+            // Match specific record
+            $matcher = new ServiceNameMatcher();
+            $result = $matcher->matchAndUpdatePnLItems($id);
+            
+            if ($result['success']) {
+                return response()->json([
+                    'success' => true,
+                    'message' => "✅ Matched {$result['matched_count']} services for PNL record",
+                    'data' => $result
+                ]);
+            } else {
+                return response()->json([
+                    'success' => false,
+                    'message' => $result['message']
+                ], 400);
+            }
+        } else {
+            // Match all records
+            $matcher = new ServiceNameMatcher();
+            $results = $matcher->matchAllPnLRecords();
+            
+            $totalMatched = 0;
+            foreach ($results as $result) {
+                if ($result['success']) {
+                    $totalMatched += $result['matched_count'];
+                }
+            }
+            
+            return response()->json([
+                'success' => true,
+                'message' => "✅ Matched {$totalMatched} services across all PNL records",
+                'data' => $results
+            ]);
+        }
+        
+    } catch (\Exception $e) {
+        Log::error('Match services failed: ' . $e->getMessage());
+        return response()->json([
+            'success' => false,
+            'message' => 'Error: ' . $e->getMessage()
+        ], 500);
+    }
 }
 }

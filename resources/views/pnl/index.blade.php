@@ -219,135 +219,133 @@
             </div>
         </div>
 
-        <!-- Table Section -->
-        <div class="table-card">
-            <div class="table-responsive">
-                <table class="pnl-table">
-                    <thead>
-                        <tr>
-                            <th class="checkbox-col">
-                                <div class="custom-checkbox">
-                                    <input type="checkbox" id="selectAllCheckbox">
-                                    <label for="selectAllCheckbox"></label>
-                                </div>
-                            </th>
-                            <th>#</th>
-                            <th>Date</th>
-                            <th>From</th>
-                            <th>Guest Name</th>
-                            <th>Subject</th>
-                            <th>Tour Ref</th>
-                            <th>Invoice #</th>
-                            <th>Category</th>
-                            <th>Amount</th>
-                            <th>Status</th>
-                            <th class="text-center">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @forelse($pnlRecords as $record)
-                            <tr class="pnl-row" data-id="{{ $record->id }}">
-                                <td class="checkbox-col" onclick="event.stopPropagation()">
-                                    <div class="custom-checkbox">
-                                        <input type="checkbox" class="record-checkbox" id="record_{{ $record->id }}"
-                                            value="{{ $record->id }}">
-                                        <label for="record_{{ $record->id }}"></label>
-                                    </div>
-                                </td>
-                                <td>
-                                    <span class="row-number">
-                                        {{ $loop->iteration }}
-                                    </span>
-                                </td>
-                                <td>
-                                <td>
-                                    <div class="date-cell">
-                                        <span class="date-main">{{ $record->received_at->format('d/m/Y') }}</span>
-                                        <span class="date-time">{{ $record->received_at->format('H:i') }}</span>
-                                    </div>
-                                </td>
-                                <td>
-                                    <div class="from-cell">
-                                        <span class="from-name">{{ $record->from_address ?: '-' }}</span>
-                                        <span class="from-email">{{ $record->from_email }}</span>
-                                    </div>
-                                </td>
-                                <td>
-                                    <div class="vendor-cell">
-                                        <span class="vendor-name">{{ $record->vendor_name ?: '-' }}</span>
-                                        @if ($record->country_code)
-                                            <span class="country-tag">{{ $record->country_code }}</span>
-                                        @endif
-                                    </div>
-                                </td>
-                                <td>
-                                    <div class="subject-cell" title="{{ $record->subject }}">
-                                        {{ Str::limit($record->subject, 35) }}
-                                    </div>
-                                </td>
-                                <td><code class="ref-code">{{ $record->tour_ref ?: '-' }}</code></td>
-                                <td><code class="invoice-code">{{ $record->invoice_number ?: '-' }}</code></td>
-                                <td>
-                                    @if ($record->category == 'Multi')
-                                        <span class="badge-category badge-multi">Multiple</span>
-                                    @elseif($record->category)
-                                        <span class="badge-category badge-default">{{ $record->category }}</span>
-                                    @else
-                                        <span class="badge-category badge-other">Other</span>
-                                    @endif
-                                </td>
-                                <td>
-                                    <span class="amount-value">${{ number_format($record->amount, 2) }}</span>
-                                </td>
-                                <td>
-                                    @if ($record->read_status == 'unread')
-                                        <span class="status-badge status-unread">
-                                            <i class="fas fa-circle me-1"></i> Unread
-                                        </span>
-                                    @else
-                                        <span class="status-badge status-read">
-                                            <i class="fas fa-check-circle me-1"></i> Read
-                                        </span>
-                                    @endif
-                                </td>
-                                <td>
-                                    <div class="action-buttons">
-                                        <a href="{{ route('pnl.view-excel', ['country' => $record->country_code ?? 'SG', 'id' => $record->id]) }}"
-                                            class="action-btn action-btn-view" target="_blank" title="View PnL Sheet">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                    </div>
-                                </td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="12" class="empty-state">
-                                    <div class="empty-state-content">
-                                        <i class="fas fa-inbox"></i>
-                                        <h4>No PnL Records Found</h4>
-                                        <p>Click the "Fetch Emails" button to import PnL data from emails.</p>
-                                    </div>
-                                </td>
-                            </tr>
-                        @endforelse
-                    </tbody>
-                </table>
-            </div>
+     <!-- Table Section -->
+<div class="table-card">
+    <div class="table-responsive">
+        <table class="pnl-table">
+            <thead>
+                <tr>
+                    <th class="checkbox-col">
+                        <div class="custom-checkbox">
+                            <input type="checkbox" id="selectAllCheckbox">
+                            <label for="selectAllCheckbox"></label>
+                        </div>
+                    </th>
+                    <th>#</th>
+                    <th>Date</th>
+                    <th>From</th>
+                    <th>Guest Name</th>
+                    <th>Subject</th>
+                    <th>Tour Ref</th>
+                    <th>Invoice #</th>
+                    <th>Category</th>
+                    <th>Amount</th>
+                    <th>Status</th>
+                    <th class="text-center">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @forelse($pnlRecords as $record)
+                    <tr class="pnl-row" data-id="{{ $record->id }}">
+                        <td class="checkbox-col" onclick="event.stopPropagation()">
+                            <div class="custom-checkbox">
+                                <input type="checkbox" class="record-checkbox" id="record_{{ $record->id }}"
+                                    value="{{ $record->id }}">
+                                <label for="record_{{ $record->id }}"></label>
+                            </div>
+                        </td>
+                        <td>
+                            <span class="row-number">
+                                {{ $loop->iteration }}
+                            </span>
+                        </td>
+                        <td>
+                            <div class="date-cell">
+                                <span class="date-main">{{ $record->received_at->format('d/m/Y') }}</span>
+                                <span class="date-time">{{ $record->received_at->format('H:i') }}</span>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="from-cell">
+                                <span class="from-name">{{ $record->from_address ?: '-' }}</span>
+                                <span class="from-email">{{ $record->from_email }}</span>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="vendor-cell">
+                                <span class="vendor-name">{{ $record->vendor_name ?: '-' }}</span>
+                                @if ($record->country_code)
+                                    <span class="country-tag">{{ $record->country_code }}</span>
+                                @endif
+                            </div>
+                        </td>
+                        <td>
+                            <div class="subject-cell" title="{{ $record->subject }}">
+                                {{ Str::limit($record->subject, 35) }}
+                            </div>
+                        </td>
+                        <td><code class="ref-code">{{ $record->tour_ref ?: '-' }}</code></td>
+                        <td><code class="invoice-code">{{ $record->invoice_number ?: '-' }}</code></td>
+                        <td>
+                            @if ($record->category == 'Multi')
+                                <span class="badge-category badge-multi">Multiple</span>
+                            @elseif($record->category)
+                                <span class="badge-category badge-default">{{ $record->category }}</span>
+                            @else
+                                <span class="badge-category badge-other">Other</span>
+                            @endif
+                        </td>
+                        <td>
+                            <span class="amount-value">${{ number_format($record->amount, 2) }}</span>
+                        </td>
+                        <td>
+                            @if ($record->read_status == 'unread')
+                                <span class="status-badge status-unread">
+                                    <i class="fas fa-circle me-1"></i> Unread
+                                </span>
+                            @else
+                                <span class="status-badge status-read">
+                                    <i class="fas fa-check-circle me-1"></i> Read
+                                </span>
+                            @endif
+                        </td>
+                        <td>
+                            <div class="action-buttons">
+                                <a href="{{ route('pnl.view-excel', ['country' => $record->country_code ?? 'SG', 'id' => $record->id]) }}"
+                                    class="action-btn action-btn-view" target="_blank" title="View PnL Sheet">
+                                    <i class="fas fa-eye"></i>
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td colspan="12" class="empty-state">
+                            <div class="empty-state-content">
+                                <i class="fas fa-inbox"></i>
+                                <h4>No PnL Records Found</h4>
+                                <p>Click the "Fetch Emails" button to import PnL data from emails.</p>
+                            </div>
+                        </td>
+                    </tr>
+                @endforelse
+            </tbody>
+        </table>
+    </div>
 
-            <!-- Pagination -->
-            <!-- Pagination -->
-            @if ($pnlRecords->hasPages())
-                <div class="pagination-wrapper">
-                    <div class="pagination-info">
-                        Showing {{ $pnlRecords->firstItem() ?? 0 }} to {{ $pnlRecords->lastItem() ?? 0 }} of
-                        {{ $pnlRecords->total() }} results
-                    </div>
-                    <div class="pagination-container">
-                        {{ $pnlRecords->links('pagination::bootstrap-5') }}
-                    </div>
-                </div>
-            @endif
+    <!-- Pagination -->
+    @if ($pnlRecords->hasPages())
+        <div class="pagination-wrapper">
+            <div class="pagination-info">
+                Showing {{ $pnlRecords->firstItem() ?? 0 }} to {{ $pnlRecords->lastItem() ?? 0 }} of
+                {{ $pnlRecords->total() }} results
+            </div>
+            <div class="pagination-container">
+                {{ $pnlRecords->links('pagination::bootstrap-5') }}
+            </div>
         </div>
+    @endif
+</div>
     </div>
 
     <!-- Email Modal -->

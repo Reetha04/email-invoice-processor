@@ -7,6 +7,7 @@ use App\Models\PnlItem;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use App\Models\IncomingEmail;
 
 class PnlEmailService
 {
@@ -54,6 +55,9 @@ class PnlEmailService
 public function fetchPnLEmails()
 {
     try {
+        // ✅ Increase execution time
+        set_time_limit(300); // 5 minutes
+        
         // STEP 1: Get all existing message IDs from database
         $existingIds = PnlRecord::pluck('message_id')->toArray();
         Log::info("📊 Existing emails in DB: " . count($existingIds));
@@ -74,8 +78,9 @@ public function fetchPnLEmails()
                 '$select' => 'id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
             ]);
             
+            // ✅ Increase timeout for each request
             $response = Http::withToken($this->accessToken)
-                ->timeout(60)
+                ->timeout(120) // 2 minutes per request
                 ->get($url);
             
             if (!$response->ok()) {
@@ -98,7 +103,6 @@ public function fetchPnLEmails()
             
             Log::info("📥 Page {$pageCount}: " . count($messages) . " emails (Total: " . count($allMessages) . ")");
             
-            // ✅ REMOVED the maxPages limit - will fetch ALL pages
             if ($nextLink) {
                 usleep(200000); // Small delay between requests
             }
@@ -109,44 +113,55 @@ public function fetchPnLEmails()
         
         // STEP 3: Filter to find NEW emails only
         $newMessages = [];
+        $existingIdSet = array_flip($existingIds);
         foreach ($allMessages as $message) {
-            if (!in_array($message['id'], $existingIds)) {
+            if (!isset($existingIdSet[$message['id']])) {
                 $newMessages[] = $message;
             }
         }
         
         Log::info("🆕 New emails to process: " . count($newMessages));
         
-        // STEP 4: If no new emails, return early
         if (empty($newMessages)) {
             Log::info("📭 No new emails to process");
             return 0;
         }
         
-        // STEP 5: Process ONLY new emails
+        // STEP 4: Process ONLY new emails
         $sno = PnlRecord::max('sno') ?? 0;
         $newCount = 0;
         $failedEmails = [];
         
-        foreach ($newMessages as $message) {
-            $sno++;
-            Log::info("📝 Processing: " . ($message['subject'] ?? 'No Subject'));
+        // ✅ Process in smaller chunks to avoid timeout
+        $chunkSize = 10;
+        foreach (array_chunk($newMessages, $chunkSize) as $chunkIndex => $chunk) {
+            Log::info("📦 Processing chunk " . ($chunkIndex + 1) . " of " . ceil(count($newMessages) / $chunkSize));
             
-            try {
-                $fullMessage = $this->fetchFullMessage($message['id']);
-                if ($fullMessage) {
-                    $saved = $this->savePnLEmail($fullMessage, $sno);
-                    if ($saved) {
-                        $newCount++;
-                        Log::info("✅ Saved: " . ($message['subject'] ?? 'No Subject'));
-                    } else {
-                        $failedEmails[] = $message['subject'] ?? 'Unknown';
-                        Log::error("❌ FAILED to save: " . ($message['subject'] ?? 'No Subject'));
+            foreach ($chunk as $message) {
+                $sno++;
+                Log::info("📝 Processing: " . ($message['subject'] ?? 'No Subject'));
+                
+                try {
+                    $fullMessage = $this->fetchFullMessage($message['id']);
+                    if ($fullMessage) {
+                        $saved = $this->savePnLEmail($fullMessage, $sno);
+                        if ($saved) {
+                            $newCount++;
+                            Log::info("✅ Saved: " . ($message['subject'] ?? 'No Subject'));
+                        } else {
+                            $failedEmails[] = $message['subject'] ?? 'Unknown';
+                            Log::error("❌ FAILED to save: " . ($message['subject'] ?? 'No Subject'));
+                        }
                     }
+                } catch (\Exception $e) {
+                    $failedEmails[] = $message['subject'] ?? 'Unknown';
+                    Log::error("❌ EXCEPTION: " . $e->getMessage());
                 }
-            } catch (\Exception $e) {
-                $failedEmails[] = $message['subject'] ?? 'Unknown';
-                Log::error("❌ EXCEPTION: " . $e->getMessage());
+            }
+            
+            // Small delay between chunks
+            if ($chunkIndex < count($newMessages) / $chunkSize - 1) {
+                usleep(500000); // 0.5 second delay
             }
         }
         
@@ -526,7 +541,10 @@ if (!empty($mealItems)) {
                 'item_details' => json_encode($item['details']),
             ]);
         }
-        
+        // In PnlEmailService.php, after saving all PNL items
+
+// ✅ Auto-match hotel dates
+$this->autoMatchHotelDates($record);
         // ✅✅✅ AUTO-UPDATE: Get client_name, start_date, end_date from invoices
         $this->updatePnLItemsWithInvoiceData($record);
         
@@ -1442,7 +1460,7 @@ protected function updatePnLItemsWithInvoiceData($pnlRecord)
         if ($matchedEmail) {
             Log::info("✅ Found matching invoice for PnL record {$pnlRecord->id}");
             
-            // ✅ ALSO UPDATE PNL RECORD
+            // ✅ UPDATE PNL RECORD - client_name and dates
             $pnlRecord->vendor_name = $matchedEmail->guest_name;
             $pnlRecord->start_date = $matchedEmail->travel_start_date;
             $pnlRecord->end_date = $matchedEmail->travel_end_date;
@@ -1455,25 +1473,30 @@ protected function updatePnLItemsWithInvoiceData($pnlRecord)
             foreach ($pnlItems as $item) {
                 $updated = false;
                 
+                // ✅ Always update client_name
                 if ($matchedEmail->guest_name && $matchedEmail->guest_name !== 'NA' && $matchedEmail->guest_name !== '') {
                     $item->client_name = $matchedEmail->guest_name;
                     $updated = true;
                 }
                 
-                if ($matchedEmail->travel_start_date) {
-                    $item->start_date = $matchedEmail->travel_start_date;
-                    if (isset($item->check_in_date)) {
-                        $item->check_in_date = $matchedEmail->travel_start_date;
+                // ✅ IMPORTANT: Only update dates for NON-HOTEL items
+                // Hotel items already have their own dates from autoMatchHotelDates
+                if ($item->type !== 'HOTEL') {
+                    if ($matchedEmail->travel_start_date) {
+                        $item->start_date = $matchedEmail->travel_start_date;
+                        if (isset($item->check_in_date)) {
+                            $item->check_in_date = $matchedEmail->travel_start_date;
+                        }
+                        $updated = true;
                     }
-                    $updated = true;
-                }
-                
-                if ($matchedEmail->travel_end_date) {
-                    $item->end_date = $matchedEmail->travel_end_date;
-                    if (isset($item->check_out_date)) {
-                        $item->check_out_date = $matchedEmail->travel_end_date;
+                    
+                    if ($matchedEmail->travel_end_date) {
+                        $item->end_date = $matchedEmail->travel_end_date;
+                        if (isset($item->check_out_date)) {
+                            $item->check_out_date = $matchedEmail->travel_end_date;
+                        }
+                        $updated = true;
                     }
-                    $updated = true;
                 }
                 
                 if ($updated) {
@@ -1482,7 +1505,7 @@ protected function updatePnLItemsWithInvoiceData($pnlRecord)
                 }
             }
             
-            Log::info("✅ Updated PnL record and {$updatedCount} items with client info");
+            Log::info("✅ Updated PnL record and {$updatedCount} items with client info and dates (non-hotel items only)");
             return $updatedCount;
         }
         
@@ -1493,15 +1516,25 @@ protected function updatePnLItemsWithInvoiceData($pnlRecord)
         return 0;
     }
 }
+
 /**
  * Extract individual attraction items from email
- */
-/**
- * Extract individual attraction items from email
+ * Now calculates total amount = Adult Rate x Number of Adults
  */
 private function extractAttractionItems($html, $plainText)
 {
     $attractionItems = [];
+    
+    // Get the total number of adults
+    $totalPax = 0;
+    if (preg_match('/No\.\s*Adult\s*:\s*(\d+)/i', $plainText, $match)) {
+        $totalPax = intval($match[1]);
+    }
+    if ($totalPax == 0 && preg_match('/No\.\s*Pax\s*:\s*(\d+)/i', $plainText, $match)) {
+        $totalPax = intval($match[1]);
+    }
+    
+    Log::info("Total PAX for attraction calculation: " . $totalPax);
     
     // Try to find Attraction section
     if (preg_match('/Attraction(.*?)(?:Tour Transfers|Meals|Other Rates|$)/is', $plainText, $sectionMatch)) {
@@ -1541,16 +1574,16 @@ private function extractAttractionItems($html, $plainText)
                     continue;
                 }
                 
-                // Extract attraction name - usually column 2 (index 2) or column 3 (index 3)
+                // Extract attraction name
                 $attractionName = '';
-                $amount = 0;
+                $adultRate = 0;
                 
                 // Find attraction name - look for column with text that's not a day or city
                 foreach ($cleanParts as $index => $part) {
                     $part = trim($part);
                     // Skip if it's a day (Day 2, Day 3, etc.)
                     if (preg_match('/^Day\s*\d+/i', $part)) continue;
-                    // Skip if it's a city name (Danang, Hanoi, Langkawi, etc.)
+                    // Skip if it's a city name
                     if (preg_match('/^[A-Za-z\s]+$/', $part) && strlen($part) < 20 && in_array(trim($part), ['Danang', 'Hanoi', 'Langkawi', 'Singapore', 'Bali', 'Kuala Lumpur', 'Colombo'])) continue;
                     // If it's a long text with spaces, it's likely the attraction name
                     if (strlen($part) > 5 && !preg_match('/^\d+$/', $part)) {
@@ -1570,34 +1603,32 @@ private function extractAttractionItems($html, $plainText)
                     continue;
                 }
                 
-                // Try to find amount - look for number in RATE column or any column with decimal
+                // Try to find the Adult rate
                 foreach ($cleanParts as $part) {
                     $part = trim($part);
-                    // Look for pattern like "Adult: 85" or "85.00" or "52.6"
+                    // Look for pattern like "Adult: 85" or "Adult: 55"
                     if (preg_match('/Adult:\s*([\d.]+)/i', $part, $match)) {
-                        $amount = floatval($match[1]);
-                        break;
-                    }
-                    // Look for standalone number with decimal
-                    if (preg_match('/\b(\d+\.\d+)\b/', $part, $match)) {
-                        $amount = floatval($match[1]);
+                        $adultRate = floatval($match[1]);
                         break;
                     }
                 }
                 
-                // If amount not found, try to find in the last column
-                if ($amount == 0) {
+                // If adult rate not found in RATE column, try the last column
+                if ($adultRate == 0) {
                     $lastPart = trim(end($cleanParts));
-                    if (preg_match('/\b(\d+\.\d+)\b/', $lastPart, $match)) {
-                        $amount = floatval($match[1]);
+                    if (preg_match('/Adult:\s*([\d.]+)/i', $lastPart, $match)) {
+                        $adultRate = floatval($match[1]);
                     }
                 }
                 
-                // Skip if amount is 0 or negative
-                if ($amount <= 0) {
-                    Log::info("Skipping zero amount attraction: {$attractionName} - Amount: {$amount}");
+                // Skip if adult rate is 0 or negative
+                if ($adultRate <= 0) {
+                    Log::info("Skipping attraction with zero rate: {$attractionName} - Rate: {$adultRate}");
                     continue;
                 }
+                
+                // ✅ CRITICAL FIX: Calculate total amount = Adult Rate x Total PAX
+                $totalAmount = $adultRate * $totalPax;
                 
                 // Skip if it looks like a total or summary
                 if (preg_match('/total|transfer|entrance/i', $attractionName)) {
@@ -1606,11 +1637,15 @@ private function extractAttractionItems($html, $plainText)
                 
                 $attractionItems[] = [
                     'service_name' => $attractionName,
-                    'amount' => $amount,
-                    'details' => ['remarks' => $attractionName]
+                    'amount' => $totalAmount,  // ✅ Now it's the multiplied amount
+                    'details' => [
+                        'remarks' => $attractionName,
+                        'adult_rate' => $adultRate,
+                        'pax' => $totalPax
+                    ]
                 ];
                 
-                Log::info("✓ Attraction item extracted: {$attractionName} - \${$amount}");
+                Log::info("✓ Attraction item extracted: {$attractionName} - Rate: {$adultRate} x {$totalPax} = \${$totalAmount}");
             }
         }
     }
@@ -1618,19 +1653,14 @@ private function extractAttractionItems($html, $plainText)
     // If no items found, try HTML extraction
     if (empty($attractionItems) && !empty($html)) {
         Log::info("No attraction items from plain text, trying HTML extraction");
-        $attractionItems = $this->extractAttractionItemsFromHTML($html);
+        $attractionItems = $this->extractAttractionItemsFromHTML($html, $totalPax);
     }
     
     return $attractionItems;
 }
 
-/**
- * Extract attraction items from HTML
- */
-/**
- * Extract attraction items from HTML
- */
-private function extractAttractionItemsFromHTML($html)
+
+private function extractAttractionItemsFromHTML($html, $totalPax = 0)
 {
     $attractionItems = [];
     
@@ -1655,9 +1685,8 @@ private function extractAttractionItemsFromHTML($html)
             }
             
             $headerText = implode(' ', $headers);
-            Log::info("Table headers: " . $headerText);
             
-            // Check if this is an Attraction table (has ATTRACTION or ENTRANCE)
+            // Check if this is an Attraction table
             if (strpos($headerText, 'ATTRACTION') === false && strpos($headerText, 'ENTRANCE') === false) {
                 continue;
             }
@@ -1681,7 +1710,6 @@ private function extractAttractionItemsFromHTML($html)
             }
             
             if ($nameIndex == -1) {
-                Log::info("No name column found, using column 2");
                 $nameIndex = 2;
             }
             
@@ -1708,51 +1736,56 @@ private function extractAttractionItemsFromHTML($html)
                 // Skip if it looks like a day or city
                 if (preg_match('/^Day\s*\d+/i', $attractionName)) continue;
                 
-                $amount = 0;
+                $adultRate = 0;
                 
                 // Try to find amount in RATE column
                 if ($amountIndex != -1 && isset($cells[$amountIndex])) {
                     $amountValue = trim($cells[$amountIndex]);
-                    Log::info("Amount cell value: " . $amountValue);
                     
                     // Try to extract amount from "Adult: 85" or "85.00"
                     if (preg_match('/Adult:\s*([\d.]+)/i', $amountValue, $match)) {
-                        $amount = floatval($match[1]);
+                        $adultRate = floatval($match[1]);
                     } elseif (preg_match('/\b(\d+\.\d+)\b/', $amountValue, $match)) {
-                        $amount = floatval($match[1]);
+                        $adultRate = floatval($match[1]);
                     }
                 }
                 
                 // If amount not found, try to find in TRANSFER column
-                if ($amount == 0) {
+                if ($adultRate == 0) {
                     foreach ($cells as $cell) {
-                        // Check for TRANSFER column with amount
                         if (preg_match('/Adult:\s*([\d.]+)/i', $cell, $match)) {
-                            $amount = floatval($match[1]);
+                            $adultRate = floatval($match[1]);
                             break;
                         }
                         if (preg_match('/\b(\d+\.\d+)\b/', $cell, $match)) {
-                            $amount = floatval($match[1]);
+                            $adultRate = floatval($match[1]);
                             break;
                         }
                     }
                 }
                 
-                if ($amount <= 0) {
+                if ($adultRate <= 0) {
                     Log::info("Skipping zero amount attraction: {$attractionName}");
                     continue;
                 }
                 
-                // Skip if it's not really an attraction name (too short or all caps)
+                // Skip if it's not really an attraction name
                 if (strlen($attractionName) < 3) continue;
+                
+                // ✅ Calculate total amount = Adult Rate x Total PAX
+                $totalAmount = $adultRate * $totalPax;
                 
                 $attractionItems[] = [
                     'service_name' => $attractionName,
-                    'amount' => $amount,
-                    'details' => ['remarks' => $attractionName]
+                    'amount' => $totalAmount,  // ✅ Now it's the multiplied amount
+                    'details' => [
+                        'remarks' => $attractionName,
+                        'adult_rate' => $adultRate,
+                        'pax' => $totalPax
+                    ]
                 ];
                 
-                Log::info("✓ Attraction item extracted (HTML): {$attractionName} - \${$amount}");
+                Log::info("✓ Attraction item extracted (HTML): {$attractionName} - Rate: {$adultRate} x {$totalPax} = \${$totalAmount}");
             }
             
             if (!empty($attractionItems)) break;
@@ -1782,7 +1815,7 @@ private function extractTourTransferItems($html, $plainText, $totalPax)
     return $this->extractTourTransferItemsFromPlainText($plainText, $totalPax);
 }
 /**
- * Fallback: Extract Tour Transfer items from plain text (pipe format or space-separated)
+ * Fallback: Extract Tour Transfer items from plain text
  */
 private function extractTourTransferItemsFromPlainText($plainText, $totalPax)
 {
@@ -1801,10 +1834,8 @@ private function extractTourTransferItemsFromPlainText($plainText, $totalPax)
     $section = $sectionMatch[1];
     Log::info("Tour Transfers section found in plain text");
     
-    // Look for rows with pipe format: | Day 2 | Langkawi | (PVT) Half Day Tour | 0 | 0 | 150 | Adult: 75 |
-    // Or similar with spaces
+    // Look for rows with pipe format
     $lines = explode("\n", $section);
-    $currentService = '';
     foreach ($lines as $line) {
         $line = trim($line);
         if (empty($line)) continue;
@@ -1824,51 +1855,46 @@ private function extractTourTransferItemsFromPlainText($plainText, $totalPax)
             // Need at least 5 columns
             if (count($cleanParts) < 5) continue;
             
-            // Attempt to identify columns: day, city, attraction, adult entrance, child entrance, transfer, rate
-            // Usually day is first, city second, attraction third, then numbers, transfer, rate
+            // ✅ FIX: Get service name from ATTRACTION column
             $serviceName = '';
-            $transferAmount = 0;
             $adultRate = 0;
+            $transferAmount = 0;
             
-            // Find attraction name (usually third column)
+            // ATTRACTION is usually column 2 or 3
+            // Skip if it's empty or just a number
             if (isset($cleanParts[2]) && !empty($cleanParts[2]) && !is_numeric($cleanParts[2])) {
                 $serviceName = trim($cleanParts[2]);
             } elseif (isset($cleanParts[1]) && !empty($cleanParts[1]) && !is_numeric($cleanParts[1])) {
                 $serviceName = trim($cleanParts[1]);
             }
             
+            // Skip if no service name
+            if (empty($serviceName)) {
+                continue;
+            }
+            
+            // Skip if it's a total or summary
+            if (strpos(strtolower($serviceName), 'total') !== false) {
+                continue;
+            }
+            
             // Find transfer and rate
             foreach ($cleanParts as $idx => $val) {
                 if (is_numeric($val) && floatval($val) > 0 && $idx > 2) {
-                    // Could be transfer or other numeric
                     // Check if this is transfer column (usually before rate)
                     if (isset($cleanParts[$idx+1]) && preg_match('/Adult:/i', $cleanParts[$idx+1])) {
                         $transferAmount = floatval($val);
-                        // rate is next
                         if (preg_match('/Adult:\s*([\d.]+)/i', $cleanParts[$idx+1], $match)) {
                             $adultRate = floatval($match[1]);
                         }
                     } elseif (preg_match('/Adult:/i', $val)) {
-                        // rate is in this column
                         if (preg_match('/Adult:\s*([\d.]+)/i', $val, $match)) {
                             $adultRate = floatval($match[1]);
-                            // transfer might be previous column
                             if ($idx > 0 && is_numeric($cleanParts[$idx-1])) {
                                 $transferAmount = floatval($cleanParts[$idx-1]);
                             }
                         }
                     }
-                }
-            }
-            
-            // If service name still empty, use day+city
-            if (empty($serviceName)) {
-                $day = isset($cleanParts[0]) ? trim($cleanParts[0]) : '';
-                $city = isset($cleanParts[1]) ? trim($cleanParts[1]) : '';
-                if (!empty($day) && !empty($city)) {
-                    $serviceName = $day . ' - ' . $city;
-                } else {
-                    continue;
                 }
             }
             
@@ -1904,68 +1930,10 @@ private function extractTourTransferItemsFromPlainText($plainText, $totalPax)
             ];
             Log::info("✅ Added Tour Transfer item from plain text: {$serviceName} - \${$amount}");
         }
-        // If no pipe, maybe it's space-separated with columns
-        else {
-            // Try to match pattern: Day 2 Langkawi (PVT) Half Day Tour 0 0 150 Adult: 75
-            if (preg_match('/Day\s*\d+\s+([A-Za-z]+)\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+Adult:\s*([\d.]+)/i', $line, $matches)) {
-                $city = trim($matches[1]);
-                $attraction = trim($matches[2]);
-                $transferAmount = floatval($matches[5]);
-                $adultRate = floatval($matches[6]);
-                $serviceName = $attraction ?: $city;
-                
-                $amount = 0;
-                if ($transferAmount > 0) {
-                    $amount = $transferAmount;
-                } elseif ($adultRate > 0 && $totalPax > 0) {
-                    $amount = $adultRate * $totalPax;
-                }
-                if ($amount <= 0) continue;
-                
-                $exists = false;
-                foreach ($transferItems as $item) {
-                    if ($item['service_name'] === $serviceName) {
-                        $exists = true;
-                        break;
-                    }
-                }
-                if ($exists) continue;
-                
-                $transferItems[] = [
-                    'service_name' => $serviceName,
-                    'amount' => $amount,
-                    'details' => [
-                        'remarks' => $serviceName,
-                        'adult_rate' => $adultRate,
-                        'transfer_amount' => $transferAmount,
-                        'pax' => $totalPax,
-                    ]
-                ];
-                Log::info("✅ Added Tour Transfer item from space-separated: {$serviceName} - \${$amount}");
-            }
-        }
-    }
-    
-    // If still no items, try to get total from "Total" row
-    if (empty($transferItems)) {
-        if (preg_match('/Total.*?(\d+\.?\d*)\s*USD/i', $section, $match)) {
-            $total = floatval($match[1]);
-            if ($total > 0) {
-                $transferItems[] = [
-                    'service_name' => 'Tour Transfers Total',
-                    'amount' => $total,
-                    'details' => ['remarks' => 'Total tour transfers']
-                ];
-                Log::info("⚠️ Using total tour transfer amount as fallback: \${$total}");
-            }
-        }
     }
     
     return $transferItems;
 }
-/**
- * Extract transfers from Attraction section (if they are mixed in)
- */
 private function extractTransfersFromAttraction($plainText, $noAdult = 0)
 {
     $transferItems = [];
@@ -2089,8 +2057,9 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                 if (strpos($h, 'RATE') !== false) $hasRate = true;
             }
             
+            // Skip if not a tour transfer table
             if (!$hasDay || !$hasTransfer || !$hasRate) {
-                continue; // not a tour transfer table
+                continue;
             }
             
             Log::info("Found Tour Transfers table with headers: " . implode(', ', $headers));
@@ -2130,34 +2099,52 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                     continue;
                 }
                 
-                // Get service name (attraction) if available, else city + day
+                // ✅ FIX: Get service name from ATTRACTION column
                 $serviceName = '';
-                if ($attractionIndex != -1 && !empty($cells[$attractionIndex])) {
-                    $serviceName = trim($cells[$attractionIndex]);
-                } elseif ($cityIndex != -1 && !empty($cells[$cityIndex])) {
-                    $serviceName = trim($cells[$cityIndex]);
-                } else {
-                    $serviceName = 'Tour Transfer';
+                $adultRate = 0;
+                $transferAmount = 0;
+                
+                // Check if ATTRACTION column has a value
+                if ($attractionIndex != -1 && isset($cells[$attractionIndex])) {
+                    $attractionValue = trim($cells[$attractionIndex]);
+                    // Only use if it's not empty
+                    if (!empty($attractionValue)) {
+                        $serviceName = $attractionValue;
+                    }
                 }
                 
-                // Skip if service name is empty or looks like total
-                if (empty($serviceName) || strtoupper($serviceName) === 'TOTAL') {
+                // If no service name found in ATTRACTION column, skip this row
+                if (empty($serviceName)) {
+                    Log::info("Skipping empty transfer row");
+                    continue;
+                }
+                
+                // Skip if service name looks like a total or summary
+                if (strtoupper($serviceName) === 'TOTAL' || strpos(strtolower($serviceName), 'total') !== false) {
+                    continue;
+                }
+                
+                // Skip if it's just a number or placeholder
+                if (is_numeric($serviceName) || $serviceName === '0' || $serviceName === '-') {
                     continue;
                 }
                 
                 // Get transfer amount (if any)
-                $transferValue = trim($cells[$transferIndex] ?? '');
-                $transferAmount = floatval(preg_replace('/[^0-9.]/', '', $transferValue));
+                if ($transferIndex != -1 && isset($cells[$transferIndex])) {
+                    $transferValue = trim($cells[$transferIndex]);
+                    $transferAmount = floatval(preg_replace('/[^0-9.]/', '', $transferValue));
+                }
                 
                 // Get rate column (e.g., "Adult: 75")
-                $rateValue = trim($cells[$rateIndex] ?? '');
-                $adultRate = 0;
-                if (preg_match('/Adult:\s*([\d.]+)/i', $rateValue, $match)) {
-                    $adultRate = floatval($match[1]);
+                if ($rateIndex != -1 && isset($cells[$rateIndex])) {
+                    $rateValue = trim($cells[$rateIndex]);
+                    if (preg_match('/Adult:\s*([\d.]+)/i', $rateValue, $match)) {
+                        $adultRate = floatval($match[1]);
+                    }
                 }
                 
                 // Determine total amount:
-                // If transferAmount > 0, use that (it might be total for all pax)
+                // If transferAmount > 0, use that
                 // Else if adultRate > 0, multiply by total pax
                 $amount = 0;
                 if ($transferAmount > 0) {
@@ -2168,6 +2155,24 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                 
                 // Skip if amount <= 0
                 if ($amount <= 0) {
+                    Log::info("Skipping transfer with zero amount: {$serviceName}");
+                    continue;
+                }
+                
+                // ✅ SKIP if the service name looks like an attraction (has common attraction keywords)
+                // This prevents duplicate entries with ATTRACTION items
+                $attractionKeywords = ['Trip', 'Cable Car', 'Aquatopia', 'VinWonders', 'Safari', 'Teddy Bear', 'Coconut Jungle', 'Lantern Boat', 'Bana Hills', 'Golden Bridge', 'Halong', 'Ambrose'];
+                $isAttraction = false;
+                foreach ($attractionKeywords as $keyword) {
+                    if (stripos($serviceName, $keyword) !== false) {
+                        $isAttraction = true;
+                        break;
+                    }
+                }
+                
+                // If it looks like an attraction, skip it (it's already in ATTRACTION section)
+                if ($isAttraction) {
+                    Log::info("Skipping attraction-like transfer: {$serviceName}");
                     continue;
                 }
                 
@@ -2206,12 +2211,6 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
     
     return $transferItems;
 }
-/**
- * Extract individual Other Rates items
- */
-/**
- * Extract individual meal items from email
- */
 private function extractMealItems($plainText)
 {
     $mealItems = [];
@@ -2606,5 +2605,38 @@ private function extractOtherRateItemsByPattern($plainText)
     }
     
     return $otherRateItems;
+}
+protected function autoMatchHotelDates($record)
+{
+    try {
+        if (!$record->tour_ref || $record->tour_ref === 'NA' || $record->tour_ref === 'N/A') {
+            Log::info("No tour_ref for hotel date matching: " . $record->id);
+            return;
+        }
+        
+        // Check if there are hotel items
+        $hotelItems = PnlItem::where('pnl_record_id', $record->id)
+            ->where('type', 'HOTEL')
+            ->get();
+        
+        if ($hotelItems->isEmpty()) {
+            Log::info("No hotel items to match for record: " . $record->id);
+            return;
+        }
+        
+        // ✅ Use the HotelDateMatcherService for proper per-hotel date matching
+        $matcher = new \App\Services\HotelDateMatcherService();
+        $result = $matcher->matchHotelDates($record->id);
+        
+        if ($result['success'] && $result['updated_count'] > 0) {
+            Log::info("✅ Auto-matched hotel dates for {$record->tour_ref}: {$result['updated_count']} hotels updated");
+        } else {
+            Log::info("No hotel dates matched for: " . $record->tour_ref);
+        }
+        
+    } catch (\Exception $e) {
+        Log::error('Auto hotel date matching failed: ' . $e->getMessage());
+        Log::error($e->getTraceAsString());
+    }
 }
 }

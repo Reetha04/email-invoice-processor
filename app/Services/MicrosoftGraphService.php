@@ -638,6 +638,7 @@ protected function saveEmailMinimal($message)
         return false;
     }
 }
+// In MicrosoftGraphService.php - autoGenerateInvoice method
 protected function autoGenerateInvoice($email)
 {
     try {
@@ -659,9 +660,9 @@ protected function autoGenerateInvoice($email)
         if ($invoice) {
             Log::info("✅ Auto-generated invoice: " . $invoice->invoice_number);
             
-            // ✅ Send email
-            $this->sendInvoiceEmail($invoice);
-            Log::info("📧 Email sent for invoice: " . $invoice->invoice_number);
+            // ❌ REMOVE THIS - email is already sent in InvoiceGenerationService
+            // $this->sendInvoiceEmail($invoice);
+            // Log::info("📧 Email sent for invoice: " . $invoice->invoice_number);
             
         } else {
             Log::warning("⚠️ Invoice generation returned null for email: " . $email->subject);

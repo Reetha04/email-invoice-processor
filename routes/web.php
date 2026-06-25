@@ -37,8 +37,16 @@ Route::prefix('pnl')->name('pnl.')->group(function () {
     Route::get('/export-country-approved/{country}', [PnlController::class, 'exportByCountryApproved'])->name('export-country-approved');
    Route::match(['get', 'post'], '/export-selected', [PnlController::class, 'exportSelected'])->name('export.selected');
     Route::get('/view-selected', [PnlController::class, 'viewSelected'])->name('view-selected');
+      Route::post('/match-services', [PnlController::class, 'matchServices'])->name('match-services');
+    Route::get('/match-services', [PnlController::class, 'matchServices'])->name('match-services');
 });
+// In routes/api.php or web.php
 
+Route::prefix('hotel-match')->group(function () {
+    Route::post('/record/{pnlRecordId}', [HotelMatchController::class, 'matchHotel']);
+    Route::get('/preview/{pnlRecordId}', [HotelMatchController::class, 'preview']);
+    Route::post('/match-all', [HotelMatchController::class, 'matchAll']);
+});
 Route::get('/test-mail', function () {
     $cm = new ClientManager();
     $client = $cm->make([
