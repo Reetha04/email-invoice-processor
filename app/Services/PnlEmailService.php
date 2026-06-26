@@ -16,8 +16,8 @@ class PnlEmailService
     private $exchangeRates = [
         'LK' => 330,
         'VN' => 25500,
-        'SG' => 1.35,
-        'MY' => 4.70,
+        'SG' => 1,
+        'MY' => 1,
     ];
     
     public function __construct()
@@ -333,6 +333,7 @@ if ($totalPax == 0) {
        // 2. Transport - Extract INDIVIDUAL ITEMS
 $transportItems = $this->extractTransportItemsForCountry($htmlBody, $plainText, $countryCode);
 
+// In savePnLEmail method, find this section:
 if (!empty($transportItems)) {
     $categoriesFound[] = 'Transport';
     foreach ($transportItems as $transport) {
@@ -341,12 +342,11 @@ if (!empty($transportItems)) {
             'service_name' => $transport['service_name'],
             'hotel_name' => null,
             'amount' => $transport['amount'],
-            'details' => $transport['details']
+            'details' => $transport['details']  // ✅ This already has 'remarks' from extractTransportItemsFromTableText
         ];
         Log::info("✅ Added transport item: {$transport['service_name']} - \${$transport['amount']}");
     }
-}
-        
+}      
         // Calculate transport total
         $transportTotal = 0;
         foreach ($transportItems as $item) {
@@ -1251,6 +1251,7 @@ private function extractTransportItemsFromPlainText($text)
 }
 /**
  * Extract transport items from table text format (for Sri Lanka)
+ * Handles: Travel, Bata, Paging, Highway Charges, Driver Accomodation, Guide Fee, Water Bottles
  */
 private function extractTransportItemsFromTableText($text)
 {
@@ -1260,8 +1261,6 @@ private function extractTransportItemsFromTableText($text)
     if (preg_match('/Transport(.*?)(?:Attraction|Tour Transfers|Meals|Other Rates|$)/is', $text, $sectionMatch)) {
         $section = $sectionMatch[1];
         
-        // Look for patterns like: "Travel    1035    0.3273    338.73"
-        // or "| Travel | 1035 | 0.3273 | 338.73 |"
         $lines = explode("\n", $section);
         
         foreach ($lines as $line) {
@@ -1270,28 +1269,83 @@ private function extractTransportItemsFromTableText($text)
             
             // Skip header lines
             if (preg_match('/EXPENSE|DISTANCE|DAYS|RATE|TOTAL/i', $line)) continue;
+            if (preg_match('/^Total/i', $line)) continue;
             
-            // Try to match pattern: Name    Number    Rate    Amount
-            // This handles both pipe and space-separated formats
+            // ✅ Special handling for Water Bottles
+            if (preg_match('/Water Bottles/i', $line)) {
+                if (preg_match('/Water Bottles.*?(\d+\.?\d*)\s*USD/i', $line, $match)) {
+                    $amount = floatval($match[1]);
+                    if ($amount > 0) {
+                        $rateDetail = '';
+                        if (preg_match('/Adt\s*-\s*([\d.]+),\s*cwb\s*-\s*([\d.]+),\s*cnb\s*-\s*([\d.]+)/i', $line, $rateMatch)) {
+                            $rateDetail = "Adult: {$rateMatch[1]}, CWB: {$rateMatch[2]}, CNB: {$rateMatch[3]}";
+                        }
+                        
+                        $transportItems[] = [
+                            'service_name' => 'Water Bottles',
+                            'amount' => $amount,
+                            'details' => [
+                                'remarks' => 'Water Bottles',
+                                'rate' => $rateDetail,
+                                'type' => 'water_bottles'
+                            ]
+                        ];
+                        Log::info("✓ Water Bottles extracted: \${$amount} - {$rateDetail}");
+                    }
+                }
+                continue;
+            }
+            
+            // ✅ Try to match pattern: Name    Number    Rate    Amount
             if (preg_match('/^([A-Za-z\s]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)/', $line, $match)) {
                 $serviceName = trim($match[1]);
+                $distanceOrDays = floatval($match[2]);
+                $rate = floatval($match[3]);
                 $amount = floatval($match[4]);
                 
-                // Skip if amount is 0 or service name is empty
                 if ($amount <= 0 || empty($serviceName)) continue;
-                
-                // Skip total rows
                 if (preg_match('/total|transport/i', $serviceName)) continue;
+                
+                // ✅ Determine if the DISTANCE/DAYS is KM or Days
+                $unitType = 'Days';
+                
+                // Travel is always KM (distance)
+                if (stripos($serviceName, 'Travel') !== false) {
+                    $unitType = 'KM';
+                } 
+                // Bata, Paging, Highway Charges, Driver Accommodation, Guide Fee are Days
+                elseif (stripos($serviceName, 'Bata') !== false || 
+                        stripos($serviceName, 'Paging') !== false || 
+                        stripos($serviceName, 'Highway') !== false || 
+                        stripos($serviceName, 'Driver') !== false || 
+                        stripos($serviceName, 'Guide') !== false) {
+                    $unitType = 'Days';
+                }
+                
+                // ✅ Build remarks with distance/days info
+                $remarks = $serviceName;
+                if ($distanceOrDays > 0) {
+                    if ($unitType == 'KM') {
+                        $remarks = "{$serviceName} - {$distanceOrDays} KM";
+                    } else {
+                        $remarks = "{$serviceName} - {$distanceOrDays} Days";
+                    }
+                }
                 
                 $transportItems[] = [
                     'service_name' => $serviceName,
                     'amount' => $amount,
-                    'details' => ['remarks' => $serviceName]
+                    'details' => [
+                        'remarks' => $remarks,
+                        'distance_days' => $distanceOrDays,
+                        'unit_type' => $unitType,
+                        'rate' => $rate,
+                    ]
                 ];
                 
-                Log::info("✓ Transport item extracted (table text): {$serviceName} - \${$amount}");
+                Log::info("✓ Transport item extracted (LK): {$serviceName} - {$distanceOrDays} {$unitType} - \${$amount}");
             }
-            // Try pattern with pipe: | Name | value | value | amount |
+            // ✅ Try pattern with pipe: | Name | value | value | amount |
             elseif (preg_match('/\|\s*([A-Za-z\s]+)\s*\|\s*[\d.]*\s*\|\s*[\d.]*\s*\|\s*([\d.]+)\s*\|/', $line, $match)) {
                 $serviceName = trim($match[1]);
                 $amount = floatval($match[2]);
@@ -1299,13 +1353,37 @@ private function extractTransportItemsFromTableText($text)
                 if ($amount <= 0 || empty($serviceName)) continue;
                 if (preg_match('/total|transport/i', $serviceName)) continue;
                 
+                $distanceOrDays = 0;
+                $unitType = 'Days';
+                
+                if (preg_match('/' . preg_quote($serviceName, '/') . '\s*\|\s*([\d.]+)\s*\|/', $line, $distMatch)) {
+                    $distanceOrDays = floatval($distMatch[1]);
+                }
+                
+                if (stripos($serviceName, 'Travel') !== false) {
+                    $unitType = 'KM';
+                }
+                
+                $remarks = $serviceName;
+                if ($distanceOrDays > 0) {
+                    if ($unitType == 'KM') {
+                        $remarks = "{$serviceName} - {$distanceOrDays} KM";
+                    } else {
+                        $remarks = "{$serviceName} - {$distanceOrDays} Days";
+                    }
+                }
+                
                 $transportItems[] = [
                     'service_name' => $serviceName,
                     'amount' => $amount,
-                    'details' => ['remarks' => $serviceName]
+                    'details' => [
+                        'remarks' => $remarks,
+                        'distance_days' => $distanceOrDays,
+                        'unit_type' => $unitType,
+                    ]
                 ];
                 
-                Log::info("✓ Transport item extracted (pipe): {$serviceName} - \${$amount}");
+                Log::info("✓ Transport item extracted (LK pipe): {$serviceName} - \${$amount}");
             }
         }
     }
@@ -1317,29 +1395,201 @@ private function extractTransportItemsForCountry($html, $plainText, $countryCode
 {
     $transportItems = [];
 
-    // Always try HTML extraction first if HTML is available
+    // ✅ For Sri Lanka (LK) - Extract from HTML table directly
+    if ($countryCode == 'LK') {
+        $transportItems = $this->extractTransportItemsFromHTMLTable($html);
+        Log::info("Transport items from HTML table (LK): " . json_encode($transportItems));
+        
+        // Filter out items with amount <= 0
+        $transportItems = array_filter($transportItems, function ($item) {
+            return isset($item['amount']) && $item['amount'] > 0;
+        });
+        
+        return array_values($transportItems);
+    }
+
+    // For other countries (VN, SG, MY) - use existing logic
     if (!empty($html)) {
         $transportItems = $this->extractTransportItemsFromHTML($html);
         Log::info("Transport items from HTML: " . json_encode($transportItems));
     }
 
-    // If no items found, fallback to plain text parsing
     if (empty($transportItems)) {
         $transportItems = $this->extractTransportItemsFromPlainText($plainText);
         Log::info("Transport items from plain text: " . json_encode($transportItems));
     }
 
-    // Filter out items with amount <= 0 (already done in HTML parser, but safe)
     $transportItems = array_filter($transportItems, function ($item) {
         return isset($item['amount']) && $item['amount'] > 0;
     });
 
-    // If no items with positive amount, skip transport entirely
-    if (empty($transportItems)) {
-        Log::info("No transport items with positive amount found - skipping transport");
-        return [];
+    return array_values($transportItems);
+}
+private function extractTransportItemsFromHTMLTable($html)
+{
+    $transportItems = [];
+    
+    if (empty($html)) {
+        Log::warning("⚠️ HTML is empty for LK transport extraction");
+        return $transportItems;
     }
 
+    try {
+        libxml_use_internal_errors(true);
+        $dom = new \DOMDocument();
+        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html);
+        
+        $tables = $dom->getElementsByTagName('table');
+        Log::info("📊 Total tables found for LK: " . $tables->length);
+        
+        foreach ($tables as $tableIndex => $table) {
+            $rows = $table->getElementsByTagName('tr');
+            
+            if ($rows->length < 2) continue;
+            
+            // Get headers from first row
+            $headers = [];
+            $firstRow = $rows->item(0);
+            foreach ($firstRow->childNodes as $cell) {
+                if ($cell->nodeType === XML_ELEMENT_NODE && in_array(strtolower($cell->nodeName), ['th', 'td'])) {
+                    $headers[] = trim(strtoupper($cell->textContent));
+                }
+            }
+            
+            $headerText = implode(' ', $headers);
+            Log::info("📋 Table {$tableIndex} Headers: " . $headerText);
+            
+            // ✅ Check if this is a Transport table
+            $hasExpense = strpos($headerText, 'EXPENSE') !== false;
+            $hasDistance = strpos($headerText, 'DISTANCE') !== false || strpos($headerText, 'DAYS') !== false;
+            $hasRate = strpos($headerText, 'RATE') !== false;
+            $hasTotal = strpos($headerText, 'TOTAL') !== false;
+            
+            // Skip if not a transport table
+            if (!$hasExpense || !$hasDistance || !$hasRate || !$hasTotal) {
+                Log::info("⏭️ Skipping non-transport table: " . $headerText);
+                continue;
+            }
+            
+            Log::info("✅ Found Transport table for LK!");
+            
+            // Find column indices
+            $expenseIndex = -1;
+            $distanceIndex = -1;
+            $rateIndex = -1;
+            $totalIndex = -1;
+            
+            foreach ($headers as $index => $header) {
+                $upperHeader = strtoupper(trim($header));
+                if (strpos($upperHeader, 'EXPENSE') !== false) {
+                    $expenseIndex = $index;
+                }
+                if (strpos($upperHeader, 'DISTANCE') !== false || strpos($upperHeader, 'DAYS') !== false) {
+                    $distanceIndex = $index;
+                }
+                if (strpos($upperHeader, 'RATE') !== false) {
+                    $rateIndex = $index;
+                }
+                if (strpos($upperHeader, 'TOTAL') !== false) {
+                    $totalIndex = $index;
+                }
+            }
+            
+            Log::info("📊 Column indices - Expense: {$expenseIndex}, Distance: {$distanceIndex}, Rate: {$rateIndex}, Total: {$totalIndex}");
+            
+            // Process data rows (skip header row)
+            for ($i = 1; $i < $rows->length; $i++) {
+                $row = $rows->item($i);
+                $cells = [];
+                
+                foreach ($row->childNodes as $cell) {
+                    if ($cell->nodeType === XML_ELEMENT_NODE && in_array(strtolower($cell->nodeName), ['td', 'th'])) {
+                        $cells[] = trim($cell->textContent);
+                    }
+                }
+                
+                if (count($cells) <= max($expenseIndex, $distanceIndex, $rateIndex, $totalIndex)) {
+                    continue;
+                }
+                
+                $serviceName = trim($cells[$expenseIndex]);
+                $distanceOrDays = floatval($cells[$distanceIndex] ?? 0);
+                $rate = floatval($cells[$rateIndex] ?? 0);
+                $amount = floatval($cells[$totalIndex] ?? 0);
+                
+                // ✅ Skip if amount is 0 or service name is empty
+                if ($amount <= 0 || empty($serviceName)) {
+                    Log::info("⏭️ Skipping row - Amount: {$amount}, Service: {$serviceName}");
+                    continue;
+                }
+                
+                // Skip summary rows
+                if (preg_match('/total|transport|other cost/i', $serviceName)) {
+                    Log::info("⏭️ Skipping summary row: {$serviceName}");
+                    continue;
+                }
+                
+                // ✅ Special handling for Water Bottles
+                if (stripos($serviceName, 'Water Bottles') !== false) {
+                    $rateDetail = '';
+                    if (preg_match('/Adt\s*-\s*([\d.]+),\s*cwb\s*-\s*([\d.]+),\s*cnb\s*-\s*([\d.]+)/i', $cells[$rateIndex] ?? '', $rateMatch)) {
+                        $rateDetail = "Adult: {$rateMatch[1]}, CWB: {$rateMatch[2]}, CNB: {$rateMatch[3]}";
+                    }
+                    
+                    $transportItems[] = [
+                        'service_name' => 'Water Bottles',
+                        'amount' => $amount,
+                        'details' => [
+                            'remarks' => 'Water Bottles',
+                            'rate' => $rateDetail,
+                            'type' => 'water_bottles'
+                        ]
+                    ];
+                    Log::info("✅ Water Bottles extracted: \${$amount} - {$rateDetail}");
+                    continue;
+                }
+                
+                // ✅ Determine unit type
+                $unitType = 'Days';
+                if (stripos($serviceName, 'Travel') !== false) {
+                    $unitType = 'KM';
+                }
+                
+                // ✅ Build remarks with distance/days and rate
+                $remarks = $serviceName;
+                if ($distanceOrDays > 0) {
+                    $remarks .= " - {$distanceOrDays} " . $unitType;
+                }
+                if ($rate > 0) {
+                    $remarks .= " ({$rate} per " . $unitType . ")";
+                }
+                
+                $transportItems[] = [
+                    'service_name' => $serviceName,
+                    'amount' => $amount,
+                    'details' => [
+                        'remarks' => $remarks,
+                        'distance_days' => $distanceOrDays,
+                        'unit_type' => $unitType,
+                        'rate' => $rate,
+                    ]
+                ];
+                
+                Log::info("✅ LK Transport: {$serviceName} - {$distanceOrDays} {$unitType} - Rate: {$rate} - \${$amount}");
+            }
+            
+            // If we found items, break out of table loop
+            if (!empty($transportItems)) {
+                Log::info("✅ Found " . count($transportItems) . " transport items for LK");
+                break;
+            }
+        }
+        
+    } catch (\Exception $e) {
+        Log::error('LK Transport HTML extraction error: ' . $e->getMessage());
+        Log::error($e->getTraceAsString());
+    }
+    
     return $transportItems;
 }
 public function fetchAllPnLEmailsInBackground()
@@ -2339,10 +2589,6 @@ private function extractMealItems($plainText)
 }
 
 /**
- * Extract individual Other Rates items from the email
- * Handles format: | **Sun World Ba Na Hills: Cable car ticket only** | adult : 6 | 37 | 222.00 |
- */
-/**
  * Extract individual Other Rates items from email HTML
  * Handles HTML tables with headers: PAX, RATE, TOTAL
  */
@@ -2417,23 +2663,21 @@ private function extractOtherRateItems($html, $plainText = '')
                     continue;
                 }
                 
-                // Get service name (usually the first cell, but sometimes the table has an empty first column)
-                // In your example, the first cell is empty, so the service name is in column 1 (index 1)
+                // ✅ FIX: Get service name from the first column (col0)
+                // In your example, the first cell has the service name
                 $serviceName = '';
                 $col0 = trim($cells[0] ?? '');
                 $col1 = trim($cells[1] ?? '');
-                $col2 = trim($cells[2] ?? '');
                 
                 // Determine which column holds the service name
                 // If col0 is empty or is "Total", use col1
                 if (empty($col0) || strtoupper($col0) === 'TOTAL') {
                     $serviceName = $col1;
                 } else {
-                    // Otherwise, assume col0 is the name (or maybe col1)
                     $serviceName = $col0;
                 }
                 
-                // Skip if service name is empty or is a total row
+                // ✅ Skip if service name is empty or is a total row
                 if (empty($serviceName) || strtoupper($serviceName) === 'TOTAL') {
                     continue;
                 }
@@ -2461,15 +2705,24 @@ private function extractOtherRateItems($html, $plainText = '')
                 if ($amount <= 0) continue;
                 if ($paxType === 'cnb' && $paxCount == 0) continue;
                 
-                // Avoid duplicates (same service name)
+                // ✅ FIX: Create a unique key using service name + pax type + pax count
+                // This allows the same service name to appear for adult and child
+                $uniqueKey = $serviceName . '_' . $paxType . '_' . $paxCount;
+                
+                // Check for duplicates using the unique key
                 $exists = false;
                 foreach ($otherRateItems as $item) {
-                    if ($item['service_name'] === $serviceName) {
+                    $itemKey = $item['service_name'] . '_' . ($item['details']['pax_type'] ?? 'adult') . '_' . ($item['details']['pax'] ?? 0);
+                    if ($itemKey === $uniqueKey) {
                         $exists = true;
                         break;
                     }
                 }
-                if ($exists) continue;
+                
+                if ($exists) {
+                    Log::info("Skipping duplicate: {$serviceName} - {$paxType} : {$paxCount}");
+                    continue;
+                }
                 
                 $otherRateItems[] = [
                     'service_name' => $serviceName,
@@ -2482,7 +2735,7 @@ private function extractOtherRateItems($html, $plainText = '')
                     ]
                 ];
                 
-                Log::info("✅ Added Other Rate item from HTML: {$serviceName} - \${$amount} (Pax: {$paxCount}, Rate: {$rate})");
+                Log::info("✅ Added Other Rate item from HTML: {$serviceName} - {$paxType} : {$paxCount} - \${$amount} (Rate: {$rate})");
             }
             
             // If we found items, break out of table loop
@@ -2511,7 +2764,7 @@ private function extractOtherRateItemsFromPlainText($plainText)
 {
     $otherRateItems = [];
     
-    // Primary pattern: bold service names
+    // ✅ Pattern for bold service names with PAX, RATE, TOTAL
     $pattern = '/\|\s*\*\*([^*]+?)\*\*\s*\|\s*(?:adult|cnb)\s*:\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d,]+\.\d+)\s*\|/i';
     if (preg_match_all($pattern, $plainText, $matches, PREG_SET_ORDER)) {
         foreach ($matches as $match) {
@@ -2519,13 +2772,23 @@ private function extractOtherRateItemsFromPlainText($plainText)
             $paxCount = intval($match[2]);
             $rate = floatval($match[3]);
             $amount = floatval(str_replace(',', '', $match[4]));
-            if ($amount <= 0 || empty($serviceName)) continue;
-            if (stripos($match[0], 'cnb') !== false && $paxCount == 0) continue;
             
-            // Avoid duplicates
+            if ($amount <= 0 || empty($serviceName)) continue;
+            
+            // Determine pax type from the match
+            $paxType = stripos($match[0], 'cnb') !== false ? 'cnb' : 'adult';
+            
+            // Skip child rows with 0 pax
+            if ($paxType === 'cnb' && $paxCount == 0) continue;
+            
+            // ✅ FIX: Create unique key for adult/child combinations
+            $uniqueKey = $serviceName . '_' . $paxType . '_' . $paxCount;
+            
+            // Avoid duplicates using unique key
             $exists = false;
             foreach ($otherRateItems as $item) {
-                if ($item['service_name'] === $serviceName) {
+                $itemKey = $item['service_name'] . '_' . ($item['details']['pax_type'] ?? 'adult') . '_' . ($item['details']['pax'] ?? 0);
+                if ($itemKey === $uniqueKey) {
                     $exists = true;
                     break;
                 }
@@ -2539,6 +2802,7 @@ private function extractOtherRateItemsFromPlainText($plainText)
                     'remarks' => $serviceName,
                     'pax' => $paxCount,
                     'rate' => $rate,
+                    'pax_type' => $paxType,
                 ]
             ];
         }
@@ -2551,15 +2815,23 @@ private function extractOtherRateItemsFromPlainText($plainText)
         foreach ($matches as $match) {
             $serviceName = trim($match[1]);
             if (in_array(strtoupper($serviceName), ['PAX', 'RATE', 'TOTAL', ''])) continue;
+            
             $paxCount = intval($match[2]);
             $rate = floatval($match[3]);
             $amount = floatval(str_replace(',', '', $match[4]));
+            
             if ($amount <= 0 || empty($serviceName)) continue;
-            if (stripos($match[0], 'cnb') !== false && $paxCount == 0) continue;
+            
+            $paxType = stripos($match[0], 'cnb') !== false ? 'cnb' : 'adult';
+            if ($paxType === 'cnb' && $paxCount == 0) continue;
+            
+            // ✅ FIX: Unique key for adult/child
+            $uniqueKey = $serviceName . '_' . $paxType . '_' . $paxCount;
             
             $exists = false;
             foreach ($otherRateItems as $item) {
-                if ($item['service_name'] === $serviceName) {
+                $itemKey = $item['service_name'] . '_' . ($item['details']['pax_type'] ?? 'adult') . '_' . ($item['details']['pax'] ?? 0);
+                if ($itemKey === $uniqueKey) {
                     $exists = true;
                     break;
                 }
@@ -2573,6 +2845,7 @@ private function extractOtherRateItemsFromPlainText($plainText)
                     'remarks' => $serviceName,
                     'pax' => $paxCount,
                     'rate' => $rate,
+                    'pax_type' => $paxType,
                 ]
             ];
         }

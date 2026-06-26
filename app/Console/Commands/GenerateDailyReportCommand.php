@@ -185,34 +185,62 @@ class GenerateDailyReportCommand extends Command
         return $filePath;
     }
 
-    protected function getLatestRevisions($invoices)
-    {
-        $grouped = [];
+protected function getLatestRevisions($invoices)
+{
+    $grouped = [];
+    $baseKeysWithRevisions = [];
+    
+    // First pass: Find which invoices have revisions
+    foreach ($invoices as $invoice) {
+        $baseKey = $this->getInvoiceBaseNumber($invoice);
+        if ($invoice->is_revision) {
+            $baseKeysWithRevisions[$baseKey] = true;
+        }
+    }
+    
+    // Second pass: For each invoice, decide what to keep
+    foreach ($invoices as $invoice) {
+        $baseKey = $this->getInvoiceBaseNumber($invoice);
         
-        foreach ($invoices as $invoice) {
-            $key = $this->getInvoiceBaseNumber($invoice);
+        // Case 1: This invoice has revisions (there's at least one revision for this base)
+        if (isset($baseKeysWithRevisions[$baseKey])) {
+            // If this is the original (is_revision = false), SKIP it
+            if (!$invoice->is_revision) {
+                continue;
+            }
             
-            if (!isset($grouped[$key]) || $invoice->revision_number > $grouped[$key]->revision_number) {
-                $grouped[$key] = $invoice;
+            // If this is a revision, keep only the latest one
+            if (!isset($grouped[$baseKey]) || $invoice->revision_number > $grouped[$baseKey]->revision_number) {
+                $grouped[$baseKey] = $invoice;
+            }
+        } 
+        // Case 2: No revisions for this invoice, keep the original
+        else {
+            // Only keep if it's the original (no revision suffix)
+            if (!$invoice->is_revision) {
+                $grouped[$baseKey] = $invoice;
             }
         }
-        
-        return collect(array_values($grouped));
     }
+    
+    return collect(array_values($grouped));
+}
 
-    protected function getInvoiceBaseNumber($invoice)
-    {
-        if ($invoice->original_invoice_number) {
-            return $invoice->original_invoice_number;
-        }
-        
-        $base = $invoice->invoice_number;
-        $base = preg_replace('/_R\d+\/R\d+$/', '', $base);
-        $base = preg_replace('/R\d+$/', '', $base);
-        $base = preg_replace('/_R\d+_R\d+$/', '', $base);
-        
-        return $base;
+protected function getInvoiceBaseNumber($invoice)
+{
+    if ($invoice->original_invoice_number) {
+        return $invoice->original_invoice_number;
     }
+    
+    $base = $invoice->invoice_number;
+    $base = preg_replace('/_R\d+\/R\d+$/', '', $base);
+    $base = preg_replace('/_R\d+_R\d+$/', '', $base);
+    $base = preg_replace('/\/R\d+$/', '', $base);
+    $base = preg_replace('/R\d+$/', '', $base);
+    $base = preg_replace('/_R\d+$/', '', $base);
+    
+    return $base;
+}
 
     protected function getTravelDates($email)
     {

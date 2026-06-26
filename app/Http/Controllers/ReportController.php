@@ -135,34 +135,69 @@ public function dateWise(Request $request)
     return view('reports.date-wise', compact('reportData', 'summary', 'startDate', 'endDate'));
 }
 
-    /**
-     * Get only the latest revision for each invoice
-     * Groups by original_invoice_number and keeps the one with highest revision_number
-     */
-    protected function getLatestRevisions($invoices)
-    {
-        $grouped = [];
+protected function getLatestRevisions($invoices)
+{
+    $grouped = [];
+    $baseKeysWithRevisions = [];
+    
+    // First pass: Find which invoices have revisions
+    foreach ($invoices as $invoice) {
+        $baseKey = $this->getInvoiceBaseNumber($invoice);
+        if ($invoice->is_revision) {
+            $baseKeysWithRevisions[$baseKey] = true;
+        }
+    }
+    
+    // Second pass: For each invoice, decide what to keep
+    foreach ($invoices as $invoice) {
+        $baseKey = $this->getInvoiceBaseNumber($invoice);
         
-        foreach ($invoices as $invoice) {
-            // Determine the key for grouping
-            // If it has original_invoice_number, use that
-            // Otherwise use invoice_number without revision suffix
-            if ($invoice->original_invoice_number) {
-                $key = $invoice->original_invoice_number;
-            } else {
-                // Remove revision suffix (R1, R2, etc.)
-                $key = preg_replace('/R\d+$/i', '', $invoice->invoice_number);
+        // Case 1: This invoice has revisions (there's at least one revision for this base)
+        if (isset($baseKeysWithRevisions[$baseKey])) {
+            // If this is the original (is_revision = false), SKIP it
+            if (!$invoice->is_revision) {
+                continue;
             }
             
-            // If this key doesn't exist yet, or this invoice has higher revision number
-            if (!isset($grouped[$key]) || $invoice->revision_number > $grouped[$key]->revision_number) {
-                $grouped[$key] = $invoice;
+            // If this is a revision, keep only the latest one
+            if (!isset($grouped[$baseKey]) || $invoice->revision_number > $grouped[$baseKey]->revision_number) {
+                $grouped[$baseKey] = $invoice;
+            }
+        } 
+        // Case 2: No revisions for this invoice, keep the original
+        else {
+            // Only keep if it's the original (no revision suffix)
+            if (!$invoice->is_revision) {
+                $grouped[$baseKey] = $invoice;
             }
         }
-        
-        return collect(array_values($grouped));
     }
-
+    
+    return collect(array_values($grouped));
+}
+/**
+ * Get the base invoice number (without revision suffix)
+ * Handles formats: VN40178_R2/R2, VN40178_R2, VN40178
+ */
+protected function getInvoiceBaseNumber($invoice)
+{
+    // If there's an original_invoice_number, use that
+    if ($invoice->original_invoice_number) {
+        return $invoice->original_invoice_number;
+    }
+    
+    $invoiceNumber = $invoice->invoice_number;
+    
+    // Remove revision patterns:
+    // Remove _R2/R2, _R2_R2, /R2, R2 at the end
+    $base = preg_replace('/_R\d+\/R\d+$/', '', $invoiceNumber);
+    $base = preg_replace('/_R\d+_R\d+$/', '', $base);
+    $base = preg_replace('/\/R\d+$/', '', $base);
+    $base = preg_replace('/R\d+$/', '', $base);
+    $base = preg_replace('/_R\d+$/', '', $base);
+    
+    return $base;
+}
 public function exportMonthWise(Request $request)
 {
     $month = $request->month ?? date('m');

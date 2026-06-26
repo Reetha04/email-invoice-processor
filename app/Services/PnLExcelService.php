@@ -31,8 +31,8 @@ class PnLExcelService
         private $exchangeRates = [
         'LK' => 330,
         'VN' => 25500,
-        'SG' => 1.35,
-        'MY' => 4.70,
+        'SG' => 1,
+        'MY' => 1,
     ];
 
   private $excelColumns = [
