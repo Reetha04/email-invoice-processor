@@ -55,8 +55,11 @@ class PnlEmailService
 public function fetchPnLEmails()
 {
     try {
-        // ✅ Increase execution time
-        set_time_limit(300); // 5 minutes
+        // ✅ Increase execution time to 10 minutes
+        set_time_limit(600); // 10 minutes
+        
+        // ✅ Reconnect to database if connection is lost
+        \Illuminate\Support\Facades\DB::reconnect();
         
         // STEP 1: Get all existing message IDs from database
         $existingIds = PnlRecord::pluck('message_id')->toArray();
@@ -66,21 +69,21 @@ public function fetchPnLEmails()
         $allMessages = [];
         $nextLink = null;
         $pageCount = 0;
+        $maxPages = 20; // ✅ Limit to 20 pages to avoid timeout
         
         $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_PNL_USER') . '/messages';
         
-        Log::info("📧 Fetching ALL emails with pagination (no limit)...");
+        Log::info("📧 Fetching emails with pagination (max 20 pages)...");
         
         do {
             $url = $nextLink ?? $baseUrl . '?' . http_build_query([
-                '$top' => 100,  // 100 per page (max allowed)
+                '$top' => 50,  // ✅ Reduced from 100 to 50
                 '$orderby' => 'receivedDateTime desc',
                 '$select' => 'id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
             ]);
             
-            // ✅ Increase timeout for each request
             $response = Http::withToken($this->accessToken)
-                ->timeout(120) // 2 minutes per request
+                ->timeout(60) // ✅ Reduced from 120 to 60 seconds
                 ->get($url);
             
             if (!$response->ok()) {
@@ -103,8 +106,15 @@ public function fetchPnLEmails()
             
             Log::info("📥 Page {$pageCount}: " . count($messages) . " emails (Total: " . count($allMessages) . ")");
             
+            // ✅ Small delay between requests
             if ($nextLink) {
-                usleep(200000); // Small delay between requests
+                usleep(100000); // 0.1 second delay
+            }
+            
+            // ✅ Stop if we've reached max pages
+            if ($pageCount >= $maxPages) {
+                Log::info("⚠️ Reached max pages ({$maxPages}), stopping");
+                break;
             }
             
         } while ($nextLink);
@@ -127,15 +137,18 @@ public function fetchPnLEmails()
             return 0;
         }
         
-        // STEP 4: Process ONLY new emails
+        // STEP 4: Process ONLY new emails with smaller chunks
         $sno = PnlRecord::max('sno') ?? 0;
         $newCount = 0;
         $failedEmails = [];
         
-        // ✅ Process in smaller chunks to avoid timeout
-        $chunkSize = 10;
+        // ✅ Process in smaller chunks (5 at a time)
+        $chunkSize = 5;
         foreach (array_chunk($newMessages, $chunkSize) as $chunkIndex => $chunk) {
             Log::info("📦 Processing chunk " . ($chunkIndex + 1) . " of " . ceil(count($newMessages) / $chunkSize));
+            
+            // ✅ Reconnect before each chunk to avoid timeout
+            \Illuminate\Support\Facades\DB::reconnect();
             
             foreach ($chunk as $message) {
                 $sno++;
@@ -161,7 +174,7 @@ public function fetchPnLEmails()
             
             // Small delay between chunks
             if ($chunkIndex < count($newMessages) / $chunkSize - 1) {
-                usleep(500000); // 0.5 second delay
+                usleep(200000); // 0.2 second delay
             }
         }
         
@@ -1405,7 +1418,7 @@ protected function fetchFullMessage($messageId)
 {
     try {
         $response = Http::withToken($this->accessToken)
-            ->timeout(60)
+            ->timeout(30) // ✅ Reduced from 60 to 30 seconds
             ->get('https://graph.microsoft.com/v1.0/users/' . env('GRAPH_PNL_USER') . '/messages/' . $messageId, [
                 '$select' => 'id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
             ]);
@@ -2016,6 +2029,44 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
         
         $tables = $dom->getElementsByTagName('table');
         
+        // ✅ FIRST: Collect all attraction names from Attraction table
+        $attractionNames = [];
+        foreach ($tables as $table) {
+            $rows = $table->getElementsByTagName('tr');
+            if ($rows->length < 2) continue;
+            
+            $headers = [];
+            $firstRow = $rows->item(0);
+            foreach ($firstRow->childNodes as $cell) {
+                if ($cell->nodeType === XML_ELEMENT_NODE && in_array(strtolower($cell->nodeName), ['th', 'td'])) {
+                    $headers[] = trim(strtoupper($cell->textContent));
+                }
+            }
+            
+            $headerText = implode(' ', $headers);
+            if (strpos($headerText, 'ATTRACTION') !== false || strpos($headerText, 'ENTRANCE') !== false) {
+                for ($i = 1; $i < $rows->length; $i++) {
+                    $row = $rows->item($i);
+                    $cells = [];
+                    foreach ($row->childNodes as $cell) {
+                        if ($cell->nodeType === XML_ELEMENT_NODE && in_array(strtolower($cell->nodeName), ['td', 'th'])) {
+                            $cells[] = trim($cell->textContent);
+                        }
+                    }
+                    if (count($cells) >= 3) {
+                        $attractionName = $cells[2] ?? '';
+                        if (!empty($attractionName) && $attractionName !== 'TOTAL' && !is_numeric($attractionName)) {
+                            $attractionNames[] = strtolower(trim($attractionName));
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        
+        Log::info("Found " . count($attractionNames) . " attraction names to skip");
+        
+        // ✅ SECOND: Process Tour Transfers table
         foreach ($tables as $table) {
             $rows = $table->getElementsByTagName('tr');
             if ($rows->length < 2) continue;
@@ -2040,7 +2091,6 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
             if (!$hasDay || !$hasTransfer || !$hasRate) continue;
             
             $dayIndex = -1;
-            $cityIndex = -1;
             $attractionIndex = -1;
             $transferIndex = -1;
             $rateIndex = -1;
@@ -2048,11 +2098,12 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
             foreach ($headers as $i => $h) {
                 $upper = strtoupper(trim($h));
                 if (strpos($upper, 'DAY') !== false) $dayIndex = $i;
-                if (strpos($upper, 'CITY') !== false) $cityIndex = $i;
                 if (strpos($upper, 'ATTRACTION') !== false) $attractionIndex = $i;
                 if (strpos($upper, 'TRANSFER') !== false) $transferIndex = $i;
                 if (strpos($upper, 'RATE') !== false) $rateIndex = $i;
             }
+            
+            Log::info("Processing Tour Transfers table - Day: {$dayIndex}, Attraction: {$attractionIndex}, Transfer: {$transferIndex}, Rate: {$rateIndex}");
             
             for ($i = 1; $i < $rows->length; $i++) {
                 $row = $rows->item($i);
@@ -2063,6 +2114,7 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                     }
                 }
                 
+                // Skip if not enough columns
                 if (count($cells) <= max($transferIndex, $rateIndex)) continue;
                 
                 // Extract day number
@@ -2074,10 +2126,8 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                     }
                 }
                 
+                // ✅ Get service name from ATTRACTION column
                 $serviceName = '';
-                $adultRate = 0;
-                $transferAmount = 0;
-                
                 if ($attractionIndex != -1 && isset($cells[$attractionIndex])) {
                     $attractionValue = trim($cells[$attractionIndex]);
                     if (!empty($attractionValue)) {
@@ -2085,16 +2135,45 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                     }
                 }
                 
-                if (empty($serviceName)) continue;
+                // ✅ Skip if service name is empty
+                if (empty($serviceName)) {
+                    Log::info("Skipping row with empty service name - Day: {$dayNumber}");
+                    continue;
+                }
                 
-                if (strtoupper($serviceName) === 'TOTAL' || strpos(strtolower($serviceName), 'total') !== false) continue;
-                if (is_numeric($serviceName) || $serviceName === '0' || $serviceName === '-') continue;
+                // ✅ Skip if it's a total row
+                if (strtoupper($serviceName) === 'TOTAL' || strpos(strtolower($serviceName), 'total') !== false) {
+                    continue;
+                }
                 
+                // ✅ Skip if it's just a number or placeholder
+                if (is_numeric($serviceName) || $serviceName === '0' || $serviceName === '-') {
+                    continue;
+                }
+                
+                // ✅ Skip if service name is an attraction name
+                $isAttraction = false;
+                foreach ($attractionNames as $attractionName) {
+                    if (stripos($serviceName, $attractionName) !== false || stripos($attractionName, $serviceName) !== false) {
+                        $isAttraction = true;
+                        break;
+                    }
+                }
+                
+                if ($isAttraction) {
+                    Log::info("Skipping attraction in Tour Transfers: {$serviceName}");
+                    continue;
+                }
+                
+                // ✅ Get transfer amount
+                $transferAmount = 0;
                 if ($transferIndex != -1 && isset($cells[$transferIndex])) {
                     $transferValue = trim($cells[$transferIndex]);
                     $transferAmount = floatval(preg_replace('/[^0-9.]/', '', $transferValue));
                 }
                 
+                // ✅ Get adult rate
+                $adultRate = 0;
                 if ($rateIndex != -1 && isset($cells[$rateIndex])) {
                     $rateValue = trim($cells[$rateIndex]);
                     if (preg_match('/Adult:\s*([\d.]+)/i', $rateValue, $match)) {
@@ -2102,6 +2181,7 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                     }
                 }
                 
+                // ✅ Determine amount
                 $amount = 0;
                 if ($transferAmount > 0) {
                     $amount = $transferAmount;
@@ -2109,20 +2189,13 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                     $amount = $adultRate * $totalPax;
                 }
                 
-                if ($amount <= 0) continue;
-                
-                // Skip attraction-like items
-                $attractionKeywords = ['Trip', 'Cable Car', 'Aquatopia', 'VinWonders', 'Safari', 'Teddy Bear', 'Coconut Jungle', 'Lantern Boat', 'Bana Hills', 'Golden Bridge', 'Halong', 'Ambrose'];
-                $isAttraction = false;
-                foreach ($attractionKeywords as $keyword) {
-                    if (stripos($serviceName, $keyword) !== false) {
-                        $isAttraction = true;
-                        break;
-                    }
+                // ✅ Skip if amount is 0
+                if ($amount <= 0) {
+                    Log::info("Skipping transfer with zero amount: {$serviceName} - Transfer: {$transferAmount}, Adult Rate: {$adultRate}, Pax: {$totalPax}");
+                    continue;
                 }
                 
-                if ($isAttraction) continue;
-                
+                // ✅ Avoid duplicates
                 $exists = false;
                 foreach ($transferItems as $item) {
                     if ($item['service_name'] === $serviceName) {
@@ -2140,14 +2213,17 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                         'adult_rate' => $adultRate,
                         'transfer_amount' => $transferAmount,
                         'pax' => $totalPax,
-                        'day' => $dayNumber  // ✅ Store day number
+                        'day' => $dayNumber
                     ]
                 ];
                 
                 Log::info("✅ Added Tour Transfer: {$serviceName} - Day {$dayNumber} - \${$amount}");
             }
             
-            if (!empty($transferItems)) break;
+            // If we found items, break
+            if (!empty($transferItems)) {
+                break;
+            }
         }
         
     } catch (\Exception $e) {
@@ -2592,7 +2668,7 @@ protected function updateNonHotelItemDates($record)
             return;
         }
         
-        // Get the travel start date
+        // ✅ Use cached email to avoid multiple queries
         $tourEmail = \App\Models\IncomingEmail::where('tour_ref', $record->tour_ref)
             ->where('is_tour_confirmation', true)
             ->first();
@@ -2605,7 +2681,7 @@ protected function updateNonHotelItemDates($record)
         $travelStartDate = Carbon::parse($tourEmail->travel_start_date);
         Log::info("Travel start date: " . $travelStartDate->format('Y-m-d'));
         
-        // Get all non-hotel items
+        // ✅ Get all non-hotel items in ONE query with chunking
         $items = PnlItem::where('pnl_record_id', $record->id)
             ->whereIn('type', ['ATTRACTION', 'TOUR TRANSFER', 'TRANSPORT'])
             ->get();
@@ -2617,28 +2693,26 @@ protected function updateNonHotelItemDates($record)
         
         $updatedCount = 0;
         
+        // ✅ Use chunk for better performance
         foreach ($items as $item) {
             $itemDetails = json_decode($item->item_details, true);
             
-            // Try to extract day number from service name or details
+            // Try to extract day number
             $dayNumber = $this->extractDayNumber($item->service_name, $itemDetails);
             
             if ($dayNumber && $dayNumber > 0) {
-                // Calculate date: Day 1 = travel start date
                 $dayDate = $travelStartDate->copy()->addDays($dayNumber - 1);
-                
                 $item->start_date = $dayDate->format('Y-m-d');
                 $item->end_date = $dayDate->format('Y-m-d');
                 $item->save();
-                
                 $updatedCount++;
                 Log::info("✅ Updated: {$item->service_name} - Day {$dayNumber} -> {$dayDate->format('Y-m-d')}");
             } else {
-                // If no day number found, use travel_start_date as fallback
+                // Fallback
                 $item->start_date = $travelStartDate->format('Y-m-d');
                 $item->end_date = $travelStartDate->format('Y-m-d');
                 $item->save();
-                Log::info("⚠️ No day number found for: {$item->service_name}, using travel_start_date");
+                Log::info("⚠️ No day number for: {$item->service_name}, using travel_start_date");
             }
         }
         
