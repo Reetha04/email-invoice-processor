@@ -3128,17 +3128,30 @@ protected function updateNonHotelItemDates($record)
             ->where('is_tour_confirmation', true)
             ->first();
         
-        if (!$tourEmail || !$tourEmail->travel_start_date) {
-            Log::info("No travel start date found for: " . $record->tour_ref);
+        if (!$tourEmail) {
+            Log::info("No tour email found for: " . $record->tour_ref);
             return;
         }
         
-        $travelStartDate = Carbon::parse($tourEmail->travel_start_date);
-        Log::info("Travel start date: " . $travelStartDate->format('Y-m-d'));
+        $travelStartDate = $tourEmail->travel_start_date ? Carbon::parse($tourEmail->travel_start_date) : null;
+        $travelEndDate = $tourEmail->travel_end_date ? Carbon::parse($tourEmail->travel_end_date) : null;
         
-        // ✅ Get all non-hotel items in ONE query with chunking
+        // ✅ If no travel dates, use record dates
+        if (!$travelStartDate && $record->start_date) {
+            $travelStartDate = Carbon::parse($record->start_date);
+        }
+        if (!$travelEndDate && $record->end_date) {
+            $travelEndDate = Carbon::parse($record->end_date);
+        }
+        
+        if (!$travelStartDate && !$travelEndDate) {
+            Log::info("No travel dates found for: " . $record->tour_ref);
+            return;
+        }
+        
+        // ✅ Get all non-hotel items
         $items = PnlItem::where('pnl_record_id', $record->id)
-            ->whereIn('type', ['ATTRACTION', 'TOUR TRANSFER', 'TRANSPORT'])
+            ->whereIn('type', ['ATTRACTION', 'TOUR TRANSFER', 'TRANSPORT', 'OTHER RATES', 'MEALS'])
             ->get();
         
         if ($items->isEmpty()) {
@@ -3147,34 +3160,49 @@ protected function updateNonHotelItemDates($record)
         }
         
         $updatedCount = 0;
+        $isSriLanka = ($record->country_code == 'LK');
         
-        // ✅ Use chunk for better performance
         foreach ($items as $item) {
-            $itemDetails = json_decode($item->item_details, true);
+            // ✅ For Sri Lanka TRANSPORT, use the full travel date range
+            if ($isSriLanka && $item->type == 'TRANSPORT') {
+                if ($travelStartDate) {
+                    $item->start_date = $travelStartDate->format('Y-m-d');
+                }
+                if ($travelEndDate) {
+                    $item->end_date = $travelEndDate->format('Y-m-d');
+                }
+                $item->save();
+                $updatedCount++;
+                Log::info("✅ [Sri Lanka] Updated Transport: {$item->service_name} - {$travelStartDate->format('Y-m-d')} to {$travelEndDate->format('Y-m-d')}");
+                continue;
+            }
             
-            // Try to extract day number
+            // For other countries OR other item types, try to extract day number
+            $itemDetails = json_decode($item->item_details, true);
             $dayNumber = $this->extractDayNumber($item->service_name, $itemDetails);
             
-            if ($dayNumber && $dayNumber > 0) {
+            if ($dayNumber && $dayNumber > 0 && $travelStartDate) {
                 $dayDate = $travelStartDate->copy()->addDays($dayNumber - 1);
                 $item->start_date = $dayDate->format('Y-m-d');
                 $item->end_date = $dayDate->format('Y-m-d');
                 $item->save();
                 $updatedCount++;
                 Log::info("✅ Updated: {$item->service_name} - Day {$dayNumber} -> {$dayDate->format('Y-m-d')}");
-            } else {
-                // Fallback
+            } elseif ($travelStartDate && $travelEndDate) {
+                // Fallback: use full travel date range
                 $item->start_date = $travelStartDate->format('Y-m-d');
-                $item->end_date = $travelStartDate->format('Y-m-d');
+                $item->end_date = $travelEndDate->format('Y-m-d');
                 $item->save();
-                Log::info("⚠️ No day number for: {$item->service_name}, using travel_start_date");
+                $updatedCount++;
+                Log::info("✅ Updated: {$item->service_name} - {$travelStartDate->format('Y-m-d')} to {$travelEndDate->format('Y-m-d')}");
             }
         }
         
-        Log::info("✅ Updated {$updatedCount} items with day-based dates for record {$record->id}");
+        Log::info("✅ Updated {$updatedCount} items with travel dates for record {$record->id}");
         
     } catch (\Exception $e) {
         Log::error('Error updating non-hotel item dates: ' . $e->getMessage());
+        Log::error($e->getTraceAsString());
     }
 }
 
