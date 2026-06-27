@@ -471,6 +471,7 @@ if (!empty($mealItems)) {
         ];
     }
 }
+         $pnlItemsToSave = $this->sortPnLItems($pnlItemsToSave);
         
         $categoriesString = implode(', ', $categoriesFound);
         $exchangeRate = $this->exchangeRates[$countryCode] ?? 25500;
@@ -561,7 +562,37 @@ $this->autoMatchHotelDates($record);
     }
 }
     
-
+/**
+ * Sort PnL items in the required order
+ * Order: INVOICE, HOTEL, ATTRACTION, TOUR TRANSFER, MEALS, OTHER RATES, TRANSPORT
+ */
+private function sortPnLItems($items)
+{
+    $order = [
+        'INVOICE' => 1,
+        'HOTEL' => 2,
+        'ATTRACTION' => 3,
+        'TOUR TRANSFER' => 4,
+         'TRANSPORT' => 5,
+        'MEALS' => 6,
+        'OTHER RATES' => 7,
+       
+    ];
+    
+    usort($items, function ($a, $b) use ($order) {
+        $aOrder = $order[$a['type']] ?? 999;
+        $bOrder = $order[$b['type']] ?? 999;
+        
+        if ($aOrder == $bOrder) {
+            // If same type, sort by service name
+            return strcmp($a['service_name'] ?? '', $b['service_name'] ?? '');
+        }
+        
+        return $aOrder - $bOrder;
+    });
+    
+    return $items;
+}
 private function extractHotelsFromEmail($html)
 {
     $hotels = [];
@@ -1932,6 +1963,9 @@ private function extractAttractionItemsFromHTML($html, $totalPax = 0)
             $nameIndex = 2; // Default: ATTRACTION is column 2 (0-indexed)
             $rateIndex = -1;
             $dayIndex = 0;
+            $adultEntranceIndex = -1;
+            $childEntranceIndex = -1;
+            $transferIndex = -1;
             
             foreach ($headers as $index => $header) {
                 $upper = strtoupper(trim($header));
@@ -1943,6 +1977,15 @@ private function extractAttractionItemsFromHTML($html, $totalPax = 0)
                 }
                 if (strpos($upper, 'DAY') !== false) {
                     $dayIndex = $index;
+                }
+                if (strpos($upper, 'ADULT ENTRANCE') !== false) {
+                    $adultEntranceIndex = $index;
+                }
+                if (strpos($upper, 'CHILD ENTRANCE') !== false) {
+                    $childEntranceIndex = $index;
+                }
+                if (strpos($upper, 'TRANSFER') !== false) {
+                    $transferIndex = $index;
                 }
             }
             
@@ -1982,56 +2025,117 @@ private function extractAttractionItemsFromHTML($html, $totalPax = 0)
                 
                 // Skip if empty or looks like a city name
                 if (empty($attractionName) || strlen($attractionName) < 3) continue;
-                if (in_array($attractionName, ['Danang', 'Hanoi', 'Phu Quoc', 'Da Nang', 'City Center'])) continue;
+                if (in_array($attractionName, ['Danang', 'Hanoi', 'Phu Quoc', 'Da Nang', 'City Center', 'Kuala Lumpur', 'Singapore', 'Bali'])) continue;
                 
-                // Extract adult rate
+                // ✅ Extract rates from RATE column
                 $adultRate = 0;
+                $childRate = 0;
+                $transferAmount = 0;
                 
-                // Check RATE column
                 if ($rateIndex != -1 && isset($cells[$rateIndex])) {
                     $rateValue = trim($cells[$rateIndex]);
+                    
+                    // Check for "Adult: X Child: Y" format
                     if (preg_match('/Adult:\s*([\d.]+)/i', $rateValue, $match)) {
                         $adultRate = floatval($match[1]);
-                    } elseif (preg_match('/\b(\d+\.?\d*)\b/', $rateValue, $match)) {
+                    }
+                    if (preg_match('/Child:\s*([\d.]+)/i', $rateValue, $match)) {
+                        $childRate = floatval($match[1]);
+                    }
+                    
+                    // If no Adult: format, try to get any number
+                    if ($adultRate == 0 && preg_match('/\b(\d+\.?\d*)\b/', $rateValue, $match)) {
                         $adultRate = floatval($match[1]);
                     }
                 }
                 
-                // If rate not found, search all columns
-                if ($adultRate == 0) {
+                // ✅ Get transfer amount if available
+                if ($transferIndex != -1 && isset($cells[$transferIndex])) {
+                    $transferValue = trim($cells[$transferIndex]);
+                    if (is_numeric($transferValue)) {
+                        $transferAmount = floatval($transferValue);
+                    }
+                }
+                
+                // ✅ Get adult entrance count
+                $adultEntrance = 0;
+                if ($adultEntranceIndex != -1 && isset($cells[$adultEntranceIndex])) {
+                    $adultEntrance = intval($cells[$adultEntranceIndex]);
+                }
+                
+                // ✅ Get child entrance count
+                $childEntrance = 0;
+                if ($childEntranceIndex != -1 && isset($cells[$childEntranceIndex])) {
+                    $childEntrance = intval($cells[$childEntranceIndex]);
+                }
+                
+                // ✅ Calculate total amount
+                $totalAmount = 0;
+                
+                // Method 1: Use transfer amount if available and > 0
+                if ($transferAmount > 0) {
+                    $totalAmount = $transferAmount;
+                }
+                // Method 2: Calculate from adult/child rates
+                else {
+                    if ($adultRate > 0 && $totalPax > 0) {
+                        $totalAmount = $adultRate * $totalPax;
+                    }
+                    if ($childRate > 0 && $childEntrance > 0) {
+                        $totalAmount += $childRate * $childEntrance;
+                    }
+                }
+                
+                // Method 3: If still 0, check if any number exists in cells
+                if ($totalAmount == 0) {
                     foreach ($cells as $cell) {
-                        if (preg_match('/Adult:\s*([\d.]+)/i', $cell, $match)) {
-                            $adultRate = floatval($match[1]);
-                            break;
-                        }
                         if (preg_match('/\b(\d+\.?\d*)\b/', $cell, $match) && floatval($match[1]) > 0) {
-                            $adultRate = floatval($match[1]);
-                            break;
+                            // Skip if it's a day number or small numbers
+                            if (floatval($match[1]) > 1 && !preg_match('/^Day/i', $cell)) {
+                                $totalAmount = floatval($match[1]);
+                                break;
+                            }
                         }
                     }
                 }
                 
-                // Skip if no rate found
-                if ($adultRate <= 0) {
-                    Log::info("Skipping attraction with no rate: {$attractionName}");
+                // ✅ Skip if no amount found
+                if ($totalAmount <= 0) {
+                    Log::info("⏭️ Skipping attraction with zero amount: {$attractionName}");
                     continue;
                 }
                 
-                // Calculate total amount
-                $totalAmount = $adultRate * $totalPax;
+                // ✅ Build remarks WITHOUT service name
+                $remarks = "";
+                if ($adultRate > 0 && $totalPax > 0) {
+                    $remarks .= "Adult: {$totalPax} × {$adultRate} = " . ($adultRate * $totalPax);
+                }
+                if ($childRate > 0 && $childEntrance > 0) {
+                    if (!empty($remarks)) $remarks .= ", ";
+                    $remarks .= "Child: {$childEntrance} × {$childRate} = " . ($childRate * $childEntrance);
+                }
+                if ($transferAmount > 0) {
+                    if (!empty($remarks)) $remarks .= ", ";
+                    $remarks .= "Transfer: {$transferAmount}";
+                }
+                if (empty($remarks)) {
+                    $remarks = "Total: {$totalAmount}";
+                }
                 
                 $attractionItems[] = [
                     'service_name' => $attractionName,
                     'amount' => $totalAmount,
                     'details' => [
-                        'remarks' => $attractionName,
+                        'remarks' => $remarks,
                         'adult_rate' => $adultRate,
+                        'child_rate' => $childRate,
                         'pax' => $totalPax,
-                        'day' => $dayNumber
+                        'day' => $dayNumber,
+                        'transfer' => $transferAmount,
                     ]
                 ];
                 
-                Log::info("✅ Attraction: {$attractionName} - Day {$dayNumber} - Rate: {$adultRate} x {$totalPax} = \${$totalAmount}");
+                Log::info("✅ Attraction: {$attractionName} - Day {$dayNumber} - {$remarks}");
             }
             
             // If we found items, break
@@ -2042,6 +2146,7 @@ private function extractAttractionItemsFromHTML($html, $totalPax = 0)
         
     } catch (\Exception $e) {
         Log::error('Attraction HTML extraction error: ' . $e->getMessage());
+        Log::error($e->getTraceAsString());
     }
     
     return $attractionItems;
@@ -2424,9 +2529,20 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                 
                 // ✅ Get adult rate
                 $adultRate = 0;
+                $childRate = 0;
                 if ($rateIndex != -1 && isset($cells[$rateIndex])) {
                     $rateValue = trim($cells[$rateIndex]);
+                    
+                    // Check for "Adult: X" format
                     if (preg_match('/Adult:\s*([\d.]+)/i', $rateValue, $match)) {
+                        $adultRate = floatval($match[1]);
+                    }
+                    if (preg_match('/Child:\s*([\d.]+)/i', $rateValue, $match)) {
+                        $childRate = floatval($match[1]);
+                    }
+                    
+                    // If no Adult: format, try to get any number
+                    if ($adultRate == 0 && preg_match('/\b(\d+\.?\d*)\b/', $rateValue, $match)) {
                         $adultRate = floatval($match[1]);
                     }
                 }
@@ -2437,12 +2553,30 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                     $amount = $transferAmount;
                 } elseif ($adultRate > 0 && $totalPax > 0) {
                     $amount = $adultRate * $totalPax;
+                    // Add child rate if available
+                    if ($childRate > 0) {
+                        $amount += $childRate; // Assuming 1 child
+                    }
                 }
                 
                 // ✅ Skip if amount is 0
                 if ($amount <= 0) {
-                    Log::info("Skipping transfer with zero amount: {$serviceName} - Transfer: {$transferAmount}, Adult Rate: {$adultRate}, Pax: {$totalPax}");
+                    Log::info("Skipping transfer with zero amount: {$serviceName}");
                     continue;
+                }
+                
+                // ✅ Build remarks WITHOUT service name
+                $remarks = "";
+                if ($transferAmount > 0) {
+                    $remarks = "Transfer: {$transferAmount}";
+                } elseif ($adultRate > 0 && $totalPax > 0) {
+                    $remarks = "Adult: {$totalPax} × {$adultRate} = " . ($adultRate * $totalPax);
+                    if ($childRate > 0) {
+                        $remarks .= ", Child: 1 × {$childRate} = {$childRate}";
+                    }
+                }
+                if (empty($remarks)) {
+                    $remarks = "Total: {$amount}";
                 }
                 
                 // ✅ Avoid duplicates
@@ -2459,15 +2593,16 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
                     'service_name' => $serviceName,
                     'amount' => $amount,
                     'details' => [
-                        'remarks' => $serviceName,
+                        'remarks' => $remarks,
                         'adult_rate' => $adultRate,
+                        'child_rate' => $childRate,
                         'transfer_amount' => $transferAmount,
                         'pax' => $totalPax,
                         'day' => $dayNumber
                     ]
                 ];
                 
-                Log::info("✅ Added Tour Transfer: {$serviceName} - Day {$dayNumber} - \${$amount}");
+                Log::info("✅ Added Tour Transfer: {$serviceName} - Day {$dayNumber} - {$remarks}");
             }
             
             // If we found items, break
@@ -2478,6 +2613,7 @@ private function extractTourTransferItemsFromHTML($html, $totalPax)
         
     } catch (\Exception $e) {
         Log::error('Error extracting Tour Transfers: ' . $e->getMessage());
+        Log::error($e->getTraceAsString());
     }
     
     return $transferItems;
@@ -2636,9 +2772,9 @@ private function extractOtherRateItems($html, $plainText = '')
                 continue;
             }
             
-            Log::info("Found Other Rates table with headers: " . implode(', ', $headers));
+            Log::info("✅ Found Other Rates table with headers: " . implode(', ', $headers));
             
-            // Find column indices for PAX, RATE, TOTAL
+            // Find column indices
             $paxIndex = -1;
             $rateIndex = -1;
             $totalIndex = -1;
@@ -2647,6 +2783,8 @@ private function extractOtherRateItems($html, $plainText = '')
                 if (strpos($h, 'RATE') !== false) $rateIndex = $i;
                 if (strpos($h, 'TOTAL') !== false) $totalIndex = $i;
             }
+            
+            Log::info("📊 Column indices - PAX: {$paxIndex}, RATE: {$rateIndex}, TOTAL: {$totalIndex}");
             
             // Process data rows (skip header row)
             for ($i = 1; $i < $rows->length; $i++) {
@@ -2663,53 +2801,85 @@ private function extractOtherRateItems($html, $plainText = '')
                     continue;
                 }
                 
-                // ✅ FIX: Get service name from the first column (col0)
-                // In your example, the first cell has the service name
+                // ✅ Get service name from the first column (col0)
                 $serviceName = '';
                 $col0 = trim($cells[0] ?? '');
                 $col1 = trim($cells[1] ?? '');
                 
                 // Determine which column holds the service name
-                // If col0 is empty or is "Total", use col1
                 if (empty($col0) || strtoupper($col0) === 'TOTAL') {
                     $serviceName = $col1;
                 } else {
                     $serviceName = $col0;
                 }
                 
-                // ✅ Skip if service name is empty or is a total row
+                // Skip if service name is empty or is a total row
                 if (empty($serviceName) || strtoupper($serviceName) === 'TOTAL') {
                     continue;
                 }
                 
-                // Get PAX info from the PAX column
-                $paxInfo = $cells[$paxIndex] ?? '';
+                // ✅ IMPROVED: Get PAX info from the PAX column
+                $paxInfo = trim($cells[$paxIndex] ?? '');
                 $paxCount = 0;
                 $paxType = 'adult';
+                
+                // 🔍 Check for different PAX formats
+                // Format 1: "adult : 2"
                 if (preg_match('/adult\s*:\s*(\d+)/i', $paxInfo, $match)) {
                     $paxCount = intval($match[1]);
                     $paxType = 'adult';
-                } elseif (preg_match('/cnb\s*:\s*(\d+)/i', $paxInfo, $match)) {
+                } 
+                // Format 2: "cwb : 1" (child with bed)
+                elseif (preg_match('/cwb\s*:\s*(\d+)/i', $paxInfo, $match)) {
+                    $paxCount = intval($match[1]);
+                    $paxType = 'cwb';
+                }
+                // Format 3: "cnb : 1" (child no bed)
+                elseif (preg_match('/cnb\s*:\s*(\d+)/i', $paxInfo, $match)) {
                     $paxCount = intval($match[1]);
                     $paxType = 'cnb';
                 }
+                // Format 4: "child : 1"
+                elseif (preg_match('/child\s*:\s*(\d+)/i', $paxInfo, $match)) {
+                    $paxCount = intval($match[1]);
+                    $paxType = 'child';
+                }
+                // Format 5: Just a number (assume adult)
+                elseif (preg_match('/\b(\d+)\b/', $paxInfo, $match) && floatval($match[1]) > 0) {
+                    $paxCount = intval($match[1]);
+                    $paxType = 'adult';
+                }
                 
-                // Get rate and total
+                // ✅ Skip if pax count is 0 (both adult and child)
+                if ($paxCount == 0) {
+                    Log::info("⏭️ Skipping row with 0 pax: {$serviceName} - {$paxInfo}");
+                    continue;
+                }
+                
+                // ✅ Get rate
                 $rateValue = trim($cells[$rateIndex] ?? '');
                 $rate = floatval(preg_replace('/[^0-9.]/', '', $rateValue));
                 
+                // ✅ Get total amount
                 $totalValue = trim($cells[$totalIndex] ?? '');
                 $amount = floatval(preg_replace('/[^0-9.]/', '', $totalValue));
                 
-                // Skip if amount <= 0 or (child row with 0 pax)
-                if ($amount <= 0) continue;
-                if ($paxType === 'cnb' && $paxCount == 0) continue;
+                // ✅ If amount is 0 but rate and pax exist, calculate
+                if ($amount == 0 && $rate > 0 && $paxCount > 0) {
+                    $amount = $rate * $paxCount;
+                    Log::info("📊 Calculated amount: {$rate} × {$paxCount} = {$amount}");
+                }
                 
-                // ✅ FIX: Create a unique key using service name + pax type + pax count
-                // This allows the same service name to appear for adult and child
+                // ✅ Skip if amount <= 0
+                if ($amount <= 0) {
+                    Log::info("⏭️ Skipping row with zero amount: {$serviceName} - Amount: {$amount}");
+                    continue;
+                }
+                
+                // ✅ Create unique key to avoid duplicates
                 $uniqueKey = $serviceName . '_' . $paxType . '_' . $paxCount;
                 
-                // Check for duplicates using the unique key
+                // Check for duplicates
                 $exists = false;
                 foreach ($otherRateItems as $item) {
                     $itemKey = $item['service_name'] . '_' . ($item['details']['pax_type'] ?? 'adult') . '_' . ($item['details']['pax'] ?? 0);
@@ -2720,22 +2890,33 @@ private function extractOtherRateItems($html, $plainText = '')
                 }
                 
                 if ($exists) {
-                    Log::info("Skipping duplicate: {$serviceName} - {$paxType} : {$paxCount}");
+                    Log::info("⏭️ Skipping duplicate: {$serviceName} - {$paxType} : {$paxCount}");
                     continue;
                 }
                 
+                // ✅ Build remarks WITHOUT service name (only pax details)
+                if ($paxType == 'adult') {
+                    $remarks = "Adult: {$paxCount} × {$rate} = {$amount}";
+                } elseif ($paxType == 'cwb') {
+                    $remarks = "CWB: {$paxCount} × {$rate} = {$amount}";
+                } elseif ($paxType == 'cnb') {
+                    $remarks = "CNB: {$paxCount} × {$rate} = {$amount}";
+                } else {
+                    $remarks = "{$paxType}: {$paxCount} × {$rate} = {$amount}";
+                }
+                
                 $otherRateItems[] = [
-                    'service_name' => $serviceName,
+                    'service_name' => $serviceName,  // ✅ Service name in description
                     'amount' => $amount,
                     'details' => [
-                        'remarks' => $serviceName,
+                        'remarks' => $remarks,  // ✅ Only pax details
                         'pax' => $paxCount,
                         'rate' => $rate,
                         'pax_type' => $paxType,
                     ]
                 ];
                 
-                Log::info("✅ Added Other Rate item from HTML: {$serviceName} - {$paxType} : {$paxCount} - \${$amount} (Rate: {$rate})");
+                Log::info("✅ Added Other Rate: {$serviceName} - {$remarks}");
             }
             
             // If we found items, break out of table loop
@@ -2746,6 +2927,7 @@ private function extractOtherRateItems($html, $plainText = '')
         
     } catch (\Exception $e) {
         Log::error('Error extracting Other Rates from HTML: ' . $e->getMessage());
+        Log::error($e->getTraceAsString());
     }
     
     // If no items found via HTML, fallback to plain text parsing
@@ -2754,9 +2936,9 @@ private function extractOtherRateItems($html, $plainText = '')
         return $this->extractOtherRateItemsFromPlainText($plainText);
     }
     
+    Log::info("📊 Total Other Rate items extracted: " . count($otherRateItems));
     return $otherRateItems;
 }
-
 /**
  * Fallback: Extract Other Rates from plain text (pipe format)
  */
