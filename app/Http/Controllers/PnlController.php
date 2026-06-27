@@ -10,14 +10,14 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Services\PnLExcelService;
 use App\Services\ServiceNameMatcher;
-
+use Carbon\Carbon;
 class PnlController extends Controller
 {
-    public function index(Request $request)
+   public function index(Request $request)
     {
-        $query = PnlRecord::query();
+        $query = PnlRecord::query()->with('items');
         
-        // Search
+        // ========== SEARCH ==========
         if ($request->filled('search')) {
             $search = $request->search;
             $query->where(function($q) use ($search) {
@@ -25,31 +25,25 @@ class PnlController extends Controller
                   ->orWhere('invoice_number', 'like', "%{$search}%")
                   ->orWhere('subject', 'like', "%{$search}%")
                   ->orWhere('from_email', 'like', "%{$search}%")
-                  ->orWhere('is_number', 'like', "%{$search}%");
+                  ->orWhere('is_number', 'like', "%{$search}%")
+                  ->orWhere('tour_ref', 'like', "%{$search}%");
             });
         }
         
-        // Filter by category
-        if ($request->filled('category')) {
-            $query->where('category', $request->category);
-        }
-        
-        // Filter by status
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-        
-        // Filter by read status
-        if ($request->filled('read_filter')) {
-            $query->where('read_status', $request->read_filter);
-        }
-        
-        // Filter by country
+        // ========== DESTINATION-WISE (Country) ==========
         if ($request->filled('country')) {
             $query->where('country_code', $request->country);
         }
         
-        // Filter by date range
+        // ========== TRAVEL DATE-WISE ==========
+        if ($request->filled('travel_date_from')) {
+            $query->whereDate('start_date', '>=', $request->travel_date_from);
+        }
+        if ($request->filled('travel_date_to')) {
+            $query->whereDate('end_date', '<=', $request->travel_date_to);
+        }
+        
+        // ========== CONFIRMATION DATE-WISE (Received Date) ==========
         if ($request->filled('date_from')) {
             $query->whereDate('received_at', '>=', $request->date_from);
         }
@@ -57,9 +51,44 @@ class PnlController extends Controller
             $query->whereDate('received_at', '<=', $request->date_to);
         }
         
+        // ========== MONTHLY REPORT ==========
+        if ($request->filled('month_year')) {
+            $monthYear = $request->month_year;
+            $query->whereYear('received_at', substr($monthYear, 0, 4))
+                  ->whereMonth('received_at', substr($monthYear, 5, 2));
+        }
+        
+        // ========== COST CATEGORY-WISE ==========
+        if ($request->filled('cost_category')) {
+            $category = $request->cost_category;
+            $query->whereHas('items', function($q) use ($category) {
+                $q->where('type', $category);
+            });
+        }
+        
+        // ========== HOTEL-WISE FILTER ==========
+        if ($request->filled('hotel_name')) {
+            $hotelName = $request->hotel_name;
+            $query->whereHas('items', function($q) use ($hotelName) {
+                $q->where('type', 'HOTEL')
+                  ->where(function($sub) use ($hotelName) {
+                      $sub->where('hotel_name', 'like', "%{$hotelName}%")
+                          ->orWhere('service_name', 'like', "%{$hotelName}%");
+                  });
+            });
+        }
+        
+        // ========== STATUS FILTERS ==========
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+        if ($request->filled('read_filter')) {
+            $query->where('read_status', $request->read_filter);
+        }
+        
         $pnlRecords = $query->orderBy('received_at', 'desc')->paginate(20);
         
-        // Stats
+        // ========== STATS ==========
         $stats = [
             'total' => PnlRecord::count(),
             'total_amount' => PnlRecord::sum('amount'),
@@ -67,10 +96,39 @@ class PnlController extends Controller
             'approved' => PnlRecord::where('status', 'approved')->count(),
         ];
         
+        // ========== GET UNIQUE HOTELS FOR FILTER ==========
+        $hotels = PnlItem::where('type', 'HOTEL')
+            ->whereNotNull('hotel_name')
+            ->select('hotel_name')
+            ->distinct()
+            ->pluck('hotel_name')
+            ->toArray();
+        
+        // ========== GET UNIQUE COST CATEGORIES ==========
+        $costCategories = PnlItem::select('type')
+            ->distinct()
+            ->pluck('type')
+            ->toArray();
+        
         $categories = ['Hotel', 'Transport', 'Ticket', 'Activities', 'Meals', 'Other', 'Multi'];
         $countries = ['SG' => 'Singapore (SGD)', 'MY' => 'Malaysia (MYR)', 'VN' => 'Vietnam (VND)', 'LK' => 'Sri Lanka (LKR)'];
         
-        return view('pnl.index', compact('pnlRecords', 'stats', 'categories', 'countries'));
+        // ========== MONTHS FOR DROPDOWN ==========
+        $months = [];
+        for ($i = 0; $i < 12; $i++) {
+            $date = Carbon::now()->subMonths($i);
+            $months[$date->format('Y-m')] = $date->format('F Y');
+        }
+        
+        return view('pnl.index', compact(
+            'pnlRecords', 
+            'stats', 
+            'categories', 
+            'countries',
+            'hotels',
+            'costCategories',
+            'months'
+        ));
     }
     
     public function fetchEmails()

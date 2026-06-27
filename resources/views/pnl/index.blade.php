@@ -79,102 +79,177 @@
             </div>
         </div>
 
-        <!-- Filter & Actions Section -->
-        <div class="filter-section">
-            <div class="filter-card">
-                <div class="filter-header">
-                    <div class="filter-header-left">
-                        <i class="fas fa-sliders-h me-2"></i>
-                        <span>Filters</span>
+      <!-- Enhanced Filter Section -->
+<div class="filter-section">
+    <div class="filter-card">
+        <div class="filter-header">
+            <div class="filter-header-left">
+                <i class="fas fa-sliders-h me-2"></i>
+                <span>Advanced Filters</span>
+            </div>
+            <div class="filter-header-right">
+                <span class="record-badge">
+                    <i class="fas fa-database me-1"></i>
+                    {{ $pnlRecords->total() }} Records
+                </span>
+            </div>
+        </div>
+        <div class="filter-body">
+            <form method="GET" class="filter-form" id="filterForm">
+                <!-- Row 1: Basic Filters -->
+                <div class="filter-row">
+                    <div class="filter-group">
+                        <label><i class="fas fa-search"></i> Search</label>
+                        <div class="input-group">
+                            <input type="text" name="search" class="form-control form-control-pnl"
+                                placeholder="Vendor, Invoice, Subject..." value="{{ request('search') }}">
+                        </div>
                     </div>
-                    <div class="filter-header-right">
-                        <span class="record-badge">
-                            <i class="fas fa-database me-1"></i>
-                            {{ $pnlRecords->total() }} Records
-                        </span>
+                    <div class="filter-group">
+                        <label><i class="fas fa-globe"></i> Destination</label>
+                        <select name="country" class="form-select form-select-pnl">
+                            <option value="">All Destinations</option>
+                            @foreach ($countries ?? [] as $code => $name)
+                                <option value="{{ $code }}" {{ request('country') == $code ? 'selected' : '' }}>
+                                    {{ $name }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label><i class="fas fa-tag"></i> Cost Category</label>
+                        <select name="cost_category" class="form-select form-select-pnl">
+                            <option value="">All Categories</option>
+                            @foreach ($costCategories ?? [] as $cat)
+                                <option value="{{ $cat }}" {{ request('cost_category') == $cat ? 'selected' : '' }}>
+                                    {{ ucfirst(strtolower($cat)) }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                    {{-- <div class="filter-group">
+                        <label><i class="fas fa-hotel"></i> Hotel Name</label>
+                        <select name="hotel_name" class="form-select form-select-pnl">
+                            <option value="">All Hotels</option>
+                            @foreach ($hotels ?? [] as $hotel)
+                                <option value="{{ $hotel }}" {{ request('hotel_name') == $hotel ? 'selected' : '' }}>
+                                    {{ $hotel }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </div> --}}
+                </div>
+
+                <!-- Row 2: Travel Date & Confirmation Date -->
+                <div class="filter-row">
+                    <div class="filter-group">
+                        <label><i class="fas fa-calendar-check"></i> Travel Date From</label>
+                        <input type="date" name="travel_date_from" class="form-control form-control-pnl"
+                            value="{{ request('travel_date_from') }}">
+                    </div>
+                    <div class="filter-group">
+                        <label><i class="fas fa-calendar-check"></i> Travel Date To</label>
+                        <input type="date" name="travel_date_to" class="form-control form-control-pnl"
+                            value="{{ request('travel_date_to') }}">
+                    </div>
+                    <div class="filter-group">
+                        <label><i class="fas fa-calendar-alt"></i> Confirmation Date From</label>
+                        <input type="date" name="date_from" class="form-control form-control-pnl"
+                            value="{{ request('date_from') }}">
+                    </div>
+                    <div class="filter-group">
+                        <label><i class="fas fa-calendar-alt"></i> Confirmation Date To</label>
+                        <input type="date" name="date_to" class="form-control form-control-pnl"
+                            value="{{ request('date_to') }}">
                     </div>
                 </div>
-                <div class="filter-body">
-                    <form method="GET" class="filter-form">
-                        <div class="filter-row">
-                            <div class="filter-group">
-                                <label><i class="fas fa-search"></i> Search</label>
-                                <div class="input-group">
-                                    <input type="text" name="search" class="form-control form-control-pnl"
-                                        placeholder="Vendor, Invoice, Subject..." value="{{ request('search') }}">
-                                </div>
-                            </div>
-                            <div class="filter-group">
-                                <label><i class="fas fa-tag"></i> Category</label>
-                                <select name="category" class="form-select form-select-pnl">
-                                    <option value="">All Categories</option>
-                                    @foreach ($categories ?? [] as $cat)
-                                        <option value="{{ $cat }}"
-                                            {{ request('category') == $cat ? 'selected' : '' }}>
-                                            {{ $cat }}
-                                        </option>
-                                    @endforeach
-                                </select>
-                            </div>
-                            <div class="filter-group">
-                                <label><i class="fas fa-globe"></i> Country</label>
-                                <select name="country" class="form-select form-select-pnl">
-                                    <option value="">All Countries</option>
-                                    @foreach ($countries ?? [] as $code => $name)
-                                        <option value="{{ $code }}"
-                                            {{ request('country') == $code ? 'selected' : '' }}>
-                                            {{ $name }}
-                                        </option>
-                                    @endforeach
-                                </select>
-                            </div>
-                        </div>
-                        <div class="filter-row">
-                            <div class="filter-group">
-                                <label><i class="fas fa-envelope"></i> Read Status</label>
-                                <select name="read_filter" class="form-select form-select-pnl">
-                                    <option value="">All</option>
-                                    <option value="read" {{ request('read_filter') == 'read' ? 'selected' : '' }}>Read
-                                    </option>
-                                    <option value="unread" {{ request('read_filter') == 'unread' ? 'selected' : '' }}>
-                                        Unread</option>
-                                </select>
-                            </div>
-                            <div class="filter-group">
-                                <label><i class="fas fa-check-circle"></i> Approval Status</label>
-                                <select name="status" class="form-select form-select-pnl">
-                                    <option value="">All</option>
-                                    <option value="pending" {{ request('status') == 'pending' ? 'selected' : '' }}>Pending
-                                    </option>
-                                    <option value="approved" {{ request('status') == 'approved' ? 'selected' : '' }}>
-                                        Approved</option>
-                                    <option value="rejected" {{ request('status') == 'rejected' ? 'selected' : '' }}>
-                                        Rejected</option>
-                                </select>
-                            </div>
-                            <div class="filter-group">
-                                <label><i class="fas fa-calendar-alt"></i> Date From</label>
-                                <input type="date" name="date_from" class="form-control form-control-pnl"
-                                    value="{{ request('date_from') }}">
-                            </div>
-                            <div class="filter-group">
-                                <label><i class="fas fa-calendar-alt"></i> Date To</label>
-                                <input type="date" name="date_to" class="form-control form-control-pnl"
-                                    value="{{ request('date_to') }}">
-                            </div>
-                        </div>
-                        <div class="filter-actions">
-                            <button type="submit" class="btn-pnl btn-pnl-primary">
+
+                <!-- Row 3: Monthly Report & Status -->
+                <div class="filter-row">
+                    <div class="filter-group">
+                        <label><i class="fas fa-calendar-month"></i> Monthly Report</label>
+                        <select name="month_year" class="form-select form-select-pnl">
+                            <option value="">Select Month</option>
+                            @foreach ($months ?? [] as $value => $label)
+                                <option value="{{ $value }}" {{ request('month_year') == $value ? 'selected' : '' }}>
+                                    {{ $label }}
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                    {{-- <div class="filter-group">
+                        <label><i class="fas fa-check-circle"></i> Approval Status</label>
+                        <select name="status" class="form-select form-select-pnl">
+                            <option value="">All</option>
+                            <option value="pending" {{ request('status') == 'pending' ? 'selected' : '' }}>Pending</option>
+                            <option value="approved" {{ request('status') == 'approved' ? 'selected' : '' }}>Approved</option>
+                            <option value="rejected" {{ request('status') == 'rejected' ? 'selected' : '' }}>Rejected</option>
+                        </select>
+                    </div> --}}
+                    {{-- <div class="filter-group">
+                        <label><i class="fas fa-envelope"></i> Read Status</label>
+                        <select name="read_filter" class="form-select form-select-pnl">
+                            <option value="">All</option>
+                            <option value="read" {{ request('read_filter') == 'read' ? 'selected' : '' }}>Read</option>
+                            <option value="unread" {{ request('read_filter') == 'unread' ? 'selected' : '' }}>Unread</option>
+                        </select>
+                    </div> --}}
+                    <div class="filter-group">
+                        <label>&nbsp;</label>
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn-pnl btn-pnl-primary flex-grow-1">
                                 <i class="fas fa-search me-2"></i> Apply Filters
                             </button>
                             <a href="{{ route('pnl.index') }}" class="btn-pnl btn-pnl-secondary">
                                 <i class="fas fa-undo-alt me-2"></i> Reset
                             </a>
                         </div>
-                    </form>
+                    </div>
                 </div>
-            </div>
+
+                <!-- Active Filters Display -->
+                @php
+                    $activeFilters = [];
+                    if(request('search')) $activeFilters[] = 'Search: ' . request('search');
+                    if(request('country')) $activeFilters[] = 'Destination: ' . collect($countries)->get(request('country'));
+                    if(request('cost_category')) $activeFilters[] = 'Category: ' . request('cost_category');
+                    if(request('hotel_name')) $activeFilters[] = 'Hotel: ' . request('hotel_name');
+                    if(request('travel_date_from') || request('travel_date_to')) {
+                        $from = request('travel_date_from') ?: '...';
+                        $to = request('travel_date_to') ?: '...';
+                        $activeFilters[] = 'Travel: ' . $from . ' to ' . $to;
+                    }
+                    if(request('date_from') || request('date_to')) {
+                        $from = request('date_from') ?: '...';
+                        $to = request('date_to') ?: '...';
+                        $activeFilters[] = 'Confirmation: ' . $from . ' to ' . $to;
+                    }
+                    if(request('month_year')) {
+                        $monthLabel = collect($months)->get(request('month_year'));
+                        $activeFilters[] = 'Month: ' . $monthLabel;
+                    }
+                    if(request('status')) $activeFilters[] = 'Status: ' . ucfirst(request('status'));
+                    if(request('read_filter')) $activeFilters[] = 'Read: ' . ucfirst(request('read_filter'));
+                @endphp
+
+                @if(!empty($activeFilters))
+                    <div class="active-filters mt-3">
+                        <span class="active-filters-label"><i class="fas fa-filter me-1"></i> Active Filters:</span>
+                        @foreach($activeFilters as $filter)
+                            <span class="filter-tag">
+                                {{ $filter }}
+                                <a href="#" onclick="removeFilter(this)" class="filter-remove" data-param="{{ $loop->index }}">×</a>
+                            </span>
+                        @endforeach
+                        <a href="{{ route('pnl.index') }}" class="clear-all-filters">
+                            <i class="fas fa-times-circle me-1"></i> Clear All
+                        </a>
+                    </div>
+                @endif
+            </form>
         </div>
+    </div>
+</div>
 
         <!-- Bulk Actions -->
         <div class="bulk-actions">
@@ -1507,6 +1582,94 @@
         .pagination-wrapper p.small.text-muted {
             display: none !important;
         }
+
+        /* ============================================
+   ENHANCED FILTERS
+   ============================================ */
+
+/* Active Filters Display */
+.active-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background: #f8fafc;
+    border-radius: 8px;
+    border: 1px solid #e8edf2;
+}
+
+.active-filters-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-right: 0.5rem;
+}
+
+.filter-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: #e0f2fe;
+    color: #0369a1;
+    font-size: 0.7rem;
+    font-weight: 500;
+    padding: 0.2rem 0.6rem;
+    border-radius: 20px;
+    border: 1px solid #b8dff5;
+}
+
+.filter-tag .filter-remove {
+    color: #0369a1;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 0.8rem;
+    line-height: 1;
+    opacity: 0.6;
+    transition: opacity 0.2s ease;
+}
+
+.filter-tag .filter-remove:hover {
+    opacity: 1;
+}
+
+.clear-all-filters {
+    font-size: 0.7rem;
+    color: #ef4444;
+    text-decoration: none;
+    font-weight: 500;
+    margin-left: 0.25rem;
+}
+
+.clear-all-filters:hover {
+    color: #dc2626;
+    text-decoration: underline;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .filter-row {
+        grid-template-columns: 1fr 1fr !important;
+    }
+    
+    .active-filters {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .filter-tag {
+        font-size: 0.65rem;
+        padding: 0.15rem 0.5rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .filter-row {
+        grid-template-columns: 1fr !important;
+    }
+}
     </style>
 
     @push('scripts')
@@ -1670,6 +1833,45 @@
                     });
                 });
             });
+            // ========== REMOVE INDIVIDUAL FILTER ==========
+function removeFilter(element) {
+    const filterText = element.parentElement.textContent.replace('×', '').trim();
+    const form = document.getElementById('filterForm');
+    
+    // Find which filter this belongs to
+    const paramMap = {
+        'Search': 'search',
+        'Destination': 'country',
+        'Category': 'cost_category',
+        'Hotel': 'hotel_name',
+        'Travel': 'travel_date_from',
+        'Confirmation': 'date_from',
+        'Month': 'month_year',
+        'Status': 'status',
+        'Read': 'read_filter'
+    };
+    
+    // Remove the filter by clearing the corresponding input
+    for (const [key, param] of Object.entries(paramMap)) {
+        if (filterText.includes(key)) {
+            const input = document.querySelector(`[name="${param}"]`);
+            if (input) {
+                input.value = '';
+                // Also clear the 'to' date for date ranges
+                if (param === 'travel_date_from') {
+                    document.querySelector('[name="travel_date_to"]').value = '';
+                }
+                if (param === 'date_from') {
+                    document.querySelector('[name="date_to"]').value = '';
+                }
+            }
+            break;
+        }
+    }
+    
+    // Submit the form
+    form.submit();
+}
         </script>
     @endpush
 @endsection
