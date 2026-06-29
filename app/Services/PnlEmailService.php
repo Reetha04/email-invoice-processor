@@ -205,26 +205,72 @@ protected function savePnLEmail($message, $sno)
         $readStatus = isset($message['isRead']) ? ($message['isRead'] ? 'read' : 'unread') : 'unread';
         
         // ========== EXTRACT HEADER DATA ==========
-        $tourNumber = null;
+       $tourNumber = null;
         if (preg_match('/Tour No:\s*#?(\d+)/i', $plainText, $match)) {
             $tourNumber = $match[1];
         }
-        
-        $isNumber = null;
+          $isNumber = null;
         if (preg_match('/Is Number:\s*([A-Z]{2})\s*(\d+)/i', $plainText, $match)) {
             $isNumber = $match[1] . $match[2];
         }
         
+        // ✅ NOW use $isNumber
+        $baseIsNumber = $isNumber;
+        
+       $isRevision = false;
+        $finalIsNumber = $isNumber;
+        $revisionNumber = 0;
+        $versionCount = 0;
+        
+        if ($isNumber) {
+            $existingRecords = PnlRecord::where('is_number', 'LIKE', $isNumber . '%')
+                ->orWhere('original_is_number', $isNumber)
+                ->get();
+            
+            $isRevision = $existingRecords->isNotEmpty();
+            
+            if ($isRevision) {
+                Log::info("🔄 Revision detected for: {$isNumber}");
+                
+                // Get next revision number and version count
+                $newRevisionNumber = $this->getNextRevisionNumber($baseIsNumber);
+                $newVersionCount = $this->getNextVersionCount($baseIsNumber);
+                
+                // Update ALL existing records with new version count
+                $this->updateAllRevisionsWithNewVersion($baseIsNumber, $newVersionCount);
+                
+                // Create NEW record with the latest revision
+                $finalIsNumber = $baseIsNumber . '_R' . $newRevisionNumber . '/R' . $newVersionCount;
+                
+                Log::info("📝 Creating new revision: {$finalIsNumber}");
+                
+                // Store revision info
+                $revisionNumber = $newRevisionNumber;
+                $versionCount = $newVersionCount;
+                
+            } else {
+                // New email - no revision
+                $finalIsNumber = $isNumber;
+                Log::info("📝 New record: {$finalIsNumber}");
+            }
+        }
+        
         // ========== SET COUNTRY CODE ==========
         $countryCode = 'VN';
-        if ($isNumber && strpos($isNumber, 'IS') === 0) {
+        if ($baseIsNumber && strpos($baseIsNumber, 'IS') === 0) {
             $countryCode = 'LK';
-        } elseif ($isNumber && strpos($isNumber, 'VN') === 0) {
+        } elseif ($baseIsNumber && strpos($baseIsNumber, 'VN') === 0) {
             $countryCode = 'VN';
-        } elseif ($isNumber && strpos($isNumber, 'SG') === 0) {
+        } elseif ($baseIsNumber && strpos($baseIsNumber, 'SG') === 0) {
             $countryCode = 'SG';
-        } elseif ($isNumber && strpos($isNumber, 'MY') === 0) {
+        } elseif ($baseIsNumber && strpos($baseIsNumber, 'MY') === 0) {
             $countryCode = 'MY';
+        }
+        
+        // ✅ Check duplicate AFTER finalIsNumber is set
+        if ($finalIsNumber && $this->isDuplicateEmail($finalIsNumber)) {
+            Log::info("⏭️ Skipping duplicate email: {$finalIsNumber}");
+            return false;
         }
         
         $agentName = 'Unknown';
@@ -477,8 +523,7 @@ if (!empty($mealItems)) {
         $exchangeRate = $this->exchangeRates[$countryCode] ?? 25500;
         $tourRef = $tourNumber ? $tourNumber . 'CNTL' : null;
         
-        // ========== CREATE MAIN RECORD ==========
-        $record = PnlRecord::create([
+                   $record = PnlRecord::create([
             'sno' => $sno,
             'message_id' => $message['id'],
             'from_email' => $fromEmail,
@@ -489,8 +534,8 @@ if (!empty($mealItems)) {
             'body_html' => $htmlBody,
             'received_at' => $receivedAt,
             'vendor_name' => $fromName ?: 'Apple Holidays',
-            'invoice_number' => $isNumber,
-            'is_number' => $isNumber,
+            'invoice_number' => $finalIsNumber,
+            'is_number' => $finalIsNumber,
             'amount' => $totalTourCost,
             'profit_loss' => $profitLoss,
             'currency' => 'USD',
@@ -504,7 +549,13 @@ if (!empty($mealItems)) {
             'tour_ref' => $tourRef,
             'total_pax' => $totalPax,
             'total_nights' => $totalNights,
+            'revision_number' => $revisionNumber,
+            'version_count' => $versionCount,
+            'original_is_number' => $baseIsNumber,
+            'is_revised' => $isRevision,
         ]);
+
+
         
         // ========== SAVE INVOICE ITEM ==========
         if ($totalTourCost > 0) {
@@ -3229,4 +3280,228 @@ private function extractDayNumber($serviceName, $details)
     return null;
 }
 
+/**
+ * Get revision information from email
+ * Format: VN40202_R2/R3
+ */
+private function getRevisionInfo($isNumber, $plainText, $subject)
+{
+    $revisionNumber = 0;
+    $versionCount = 0;
+    $finalIsNumber = $isNumber;
+    $baseIsNumber = $isNumber;
+    
+    // 1. Check if is_number already has revision format
+    if (preg_match('/^([A-Z]{2}\d+)_R(\d+)\/R(\d+)$/', $isNumber, $match)) {
+        $baseIsNumber = $match[1];
+        $revisionNumber = intval($match[2]);
+        $versionCount = intval($match[3]);
+        Log::info("📝 IS number has revision format: R{$revisionNumber}/R{$versionCount}");
+        return [
+            'base_is_number' => $baseIsNumber,
+            'revision_number' => $revisionNumber,
+            'version_count' => $versionCount,
+            'final_is_number' => $isNumber,
+            'display_number' => $isNumber
+        ];
+    }
+    
+    // 2. Check subject for revision info
+    if (preg_match('/R(\d+)\/R(\d+)/', $subject, $match)) {
+        $revisionNumber = intval($match[1]);
+        $versionCount = intval($match[2]);
+        $finalIsNumber = $isNumber . '_R' . $revisionNumber . '/R' . $versionCount;
+        Log::info("📝 Found revision in subject: R{$revisionNumber}/R{$versionCount}");
+        return [
+            'base_is_number' => $isNumber,
+            'revision_number' => $revisionNumber,
+            'version_count' => $versionCount,
+            'final_is_number' => $finalIsNumber,
+            'display_number' => $finalIsNumber
+        ];
+    }
+    
+    // 3. Check body for revision info
+    if (preg_match('/Revised\s*(?:Version|Copy|Invoice)?\s*:?\s*R(\d+)\/R(\d+)/i', $plainText, $match)) {
+        $revisionNumber = intval($match[1]);
+        $versionCount = intval($match[2]);
+        $finalIsNumber = $isNumber . '_R' . $revisionNumber . '/R' . $versionCount;
+        Log::info("📝 Found revision in body: R{$revisionNumber}/R{$versionCount}");
+        return [
+            'base_is_number' => $isNumber,
+            'revision_number' => $revisionNumber,
+            'version_count' => $versionCount,
+            'final_is_number' => $finalIsNumber,
+            'display_number' => $finalIsNumber
+        ];
+    }
+    
+    // 4. Check if this is a revision based on existing records
+    $existingRecords = PnlRecord::where('is_number', 'LIKE', $isNumber . '%')->get();
+    
+    if ($existingRecords->isNotEmpty()) {
+        // Find the latest version
+        $latestRevision = $this->getLatestRevisionInfo($isNumber);
+        
+        if ($latestRevision) {
+            // This is a new revision - increment version count
+            $newVersionCount = $latestRevision['version_count'] + 1;
+            $revisionNumber = $latestRevision['revision_number'];
+            $finalIsNumber = $isNumber . '_R' . $revisionNumber . '/R' . $newVersionCount;
+            
+            Log::info("📝 Auto-incrementing revision: R{$revisionNumber}/R{$newVersionCount}");
+            return [
+                'base_is_number' => $isNumber,
+                'revision_number' => $revisionNumber,
+                'version_count' => $newVersionCount,
+                'final_is_number' => $finalIsNumber,
+                'display_number' => $finalIsNumber
+            ];
+        }
+    }
+    
+    // 5. Default: No revision
+    return [
+        'base_is_number' => $isNumber,
+        'revision_number' => 0,
+        'version_count' => 0,
+        'final_is_number' => $isNumber,
+        'display_number' => $isNumber
+    ];
+}
+
+/**
+ * Get the latest revision info for a base IS number
+ */
+private function getLatestRevisionInfo($baseIsNumber)
+{
+    // Find all records with this base IS number
+    $records = PnlRecord::where('is_number', 'LIKE', $baseIsNumber . '%')
+        ->orderBy('created_at', 'desc')
+        ->get();
+    
+    $latestRevision = null;
+    $maxVersionCount = 0;
+    
+    foreach ($records as $record) {
+        // Check if it has revision format
+        if (preg_match('/_R(\d+)\/R(\d+)$/', $record->is_number, $match)) {
+            $revisionNumber = intval($match[1]);
+            $versionCount = intval($match[2]);
+            
+            if ($versionCount > $maxVersionCount) {
+                $maxVersionCount = $versionCount;
+                $latestRevision = [
+                    'revision_number' => $revisionNumber,
+                    'version_count' => $versionCount,
+                    'is_number' => $record->is_number
+                ];
+            }
+        } else if ($record->is_number == $baseIsNumber) {
+            // This is the original version
+            $latestRevision = [
+                'revision_number' => 1,
+                'version_count' => 1,
+                'is_number' => $baseIsNumber
+            ];
+        }
+    }
+    
+    return $latestRevision;
+}
+
+/**
+ * Check if this is a duplicate email (same IS number already exists)
+ */
+private function isDuplicateEmail($isNumber)
+{
+    return PnlRecord::where('is_number', $isNumber)->exists();
+}
+/**
+ * Update all existing revisions with new version count
+ */
+private function updateAllRevisionsWithNewVersion($baseIsNumber, $newVersionCount)
+{
+    try {
+        // Find all records with this base IS number
+        $records = PnlRecord::where('is_number', 'LIKE', $baseIsNumber . '%')
+            ->orWhere('original_is_number', $baseIsNumber)
+            ->get();
+        
+        $updatedCount = 0;
+        
+        foreach ($records as $record) {
+            // Check if it has revision format
+            if (preg_match('/^' . preg_quote($baseIsNumber, '/') . '_R(\d+)\/R(\d+)$/', $record->is_number, $match)) {
+                $revisionNumber = intval($match[1]);
+                $oldVersionCount = intval($match[2]);
+                
+                // Only update if version count is less than new version
+                if ($oldVersionCount < $newVersionCount) {
+                    $newIsNumber = $baseIsNumber . '_R' . $revisionNumber . '/R' . $newVersionCount;
+                    $record->update([
+                        'is_number' => $newIsNumber,
+                        'invoice_number' => $newIsNumber,
+                        'version_count' => $newVersionCount,
+                        'updated_at' => now(),
+                    ]);
+                    $updatedCount++;
+                    Log::info("✅ Updated record: {$record->id} -> {$newIsNumber}");
+                }
+            }
+        }
+        
+        Log::info("✅ Updated {$updatedCount} existing records to version /R{$newVersionCount}");
+        return $updatedCount;
+        
+    } catch (\Exception $e) {
+        Log::error("❌ Failed to update existing revisions: " . $e->getMessage());
+        return 0;
+    }
+}
+
+private function getNextRevisionNumber($baseIsNumber)
+{
+    $records = PnlRecord::where('is_number', 'LIKE', $baseIsNumber . '%')
+        ->orWhere('original_is_number', $baseIsNumber)
+        ->get();
+    
+    $maxRevision = 0;
+    foreach ($records as $record) {
+        if ($record->is_number == $baseIsNumber) {
+            // ✅ Original version - revision should be 0 (will become 2 when incremented)
+            continue;
+        }
+        if (preg_match('/_R(\d+)\/R(\d+)$/', $record->is_number, $match)) {
+            $rev = intval($match[1]);
+            if ($rev > $maxRevision) {
+                $maxRevision = $rev;
+            }
+        }
+    }
+    
+    // ✅ Fix: If no revisions exist, return 2 (first revision)
+    // If revisions exist, return maxRevision + 1
+    return $maxRevision == 0 ? 2 : $maxRevision + 1;
+}
+
+private function getNextVersionCount($baseIsNumber)
+{
+    $records = PnlRecord::where('is_number', 'LIKE', $baseIsNumber . '%')
+        ->orWhere('original_is_number', $baseIsNumber)
+        ->get();
+    
+    $maxVersionCount = 0;
+    foreach ($records as $record) {
+        if (preg_match('/_R\d+\/R(\d+)$/', $record->is_number, $match)) {
+            $version = intval($match[1]);
+            if ($version > $maxVersionCount) {
+                $maxVersionCount = $version;
+            }
+        }
+    }
+    
+    // ✅ Fix: First revision = 2, Second = 3, etc.
+    return $maxVersionCount == 0 ? 2 : $maxVersionCount + 1;
+}
 }
