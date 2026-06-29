@@ -1465,4 +1465,81 @@ public function matchServices(Request $request)
         ], 500);
     }
 }
+/**
+ * Generate Detailed P&L Excel for a record
+ */
+public function exportDetailedPnL($id)
+{
+    try {
+        $record = PnlRecord::with('items')->findOrFail($id);
+        
+        $service = new \App\Services\PnLDetailedExcelService();
+        $result = $service->generateDetailedPnL($record);
+        
+        if (!$result['success']) {
+            return redirect()->back()->with('error', 'Failed to generate detailed P&L: ' . $result['message']);
+        }
+        
+        return response()->download($result['file_path'], $result['filename'], [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+        
+    } catch (\Exception $e) {
+        Log::error('Export detailed PnL failed: ' . $e->getMessage());
+        return redirect()->back()->with('error', 'Failed to export: ' . $e->getMessage());
+    }
+}
+
+/**
+ * View Detailed P&L in browser
+ */
+public function viewDetailedPnL($id)
+{
+    try {
+        $record = PnlRecord::with('items')->findOrFail($id);
+        
+        $service = new \App\Services\PnLDetailedExcelService();
+        $result = $service->generateDetailedPnL($record);
+        
+        if (!$result['success']) {
+            return redirect()->back()->with('error', 'Failed to generate detailed P&L: ' . $result['message']);
+        }
+        
+        // Get the HTML preview of the detailed P&L
+        $html = $service->getDetailedPreview($record);
+        $countryCode = $record->country_code ?? 'VN';
+        $currencySymbol = $service->getCurrencySymbol($countryCode);
+        
+        return view('pnl.detailed-pnl-view', compact('record', 'html', 'currencySymbol'));
+        
+    } catch (\Exception $e) {
+        Log::error('View Detailed PnL failed: ' . $e->getMessage());
+        return redirect()->back()->with('error', 'Failed to load: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Download Detailed P&L Excel
+ */
+public function downloadDetailedPnL($id)
+{
+    try {
+        $record = PnlRecord::with('items')->findOrFail($id);
+        
+        $service = new \App\Services\PnLDetailedExcelService();
+        $result = $service->generateDetailedPnL($record);
+        
+        if (!$result['success']) {
+            return redirect()->back()->with('error', 'Failed to generate detailed P&L: ' . $result['message']);
+        }
+        
+        return response()->download($result['file_path'], $result['filename'], [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        ])->deleteFileAfterSend(true);
+        
+    } catch (\Exception $e) {
+        Log::error('Download Detailed PnL failed: ' . $e->getMessage());
+        return redirect()->back()->with('error', 'Failed to download: ' . $e->getMessage());
+    }
+}
 }

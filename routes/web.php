@@ -20,7 +20,10 @@ Route::get('/email/view', [InvoiceController::class, 'viewEmail'])->name('email.
 Route::get('/check-invoice-exists', [InvoiceController::class, 'checkInvoiceExists'])->name('check.invoice.exists');
 Route::get('/get-email-invoice-number', [InvoiceController::class, 'getEmailInvoiceNumber'])->name('get.email.invoice.number');
 Route::get('/check-invoice-by-number', [InvoiceController::class, 'checkInvoiceByNumber'])->name('check.invoice.by.number');
-
+Route::get('/pnl/export-detailed/{id}', [PnlController::class, 'exportDetailedPnL'])->name('pnl.export.detailed');
+// Detailed P&L View
+Route::get('/pnl/view-detailed/{id}', [PnlController::class, 'viewDetailedPnL'])->name('pnl.view-detailed');
+Route::get('/pnl/download-detailed/{id}', [PnlController::class, 'downloadDetailedPnL'])->name('pnl.download-detailed');
 // ========== PNL ROUTES ==========
 Route::prefix('pnl')->name('pnl.')->group(function () {
     Route::get('/', [PnlController::class, 'index'])->name('index');

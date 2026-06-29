@@ -384,14 +384,20 @@
                                 </span>
                             @endif
                         </td>
-                        <td>
-                            <div class="action-buttons">
-                                <a href="{{ route('pnl.view-excel', ['country' => $record->country_code ?? 'SG', 'id' => $record->id]) }}"
-                                    class="action-btn action-btn-view" target="_blank" title="View PnL Sheet">
-                                    <i class="fas fa-eye"></i>
-                                </a>
-                            </div>
-                        </td>
+                       <td>
+    <div class="action-buttons">
+        <a href="{{ route('pnl.view-excel', ['country' => $record->country_code ?? 'SG', 'id' => $record->id]) }}"
+            class="action-btn action-btn-view" target="_blank" title="View PnL Sheet">
+            <i class="fas fa-eye"></i>
+        </a>
+       <a href="{{ route('pnl.view-detailed', $record->id) }}" 
+    class="btn btn-success btn-sm" 
+    onclick="event.stopPropagation();"
+    title="View Detailed P&L">
+    <i class="fas fa-file-invoice me-1"></i> Detailed P&L
+</a>
+    </div>
+</td>
                     </tr>
                 @empty
                     <tr>
