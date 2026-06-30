@@ -20,7 +20,10 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withSchedule(function (Schedule $schedule) {
         $schedule->command('emails:fetch')->everyFiveMinutes();
-        $schedule->command('pnl:fetch')->everyFiveMinutes();
+       $schedule->command('pnl:fetch')
+        ->everyFiveMinutes()
+        ->withoutOverlapping()  // ✅ Prevents overlapping schedule runs
+        ->appendOutputTo(storage_path('logs/pnl_fetch.log'));
         $schedule->command('report:daily --upload')->dailyAt('23:59');
     })
     ->create();
