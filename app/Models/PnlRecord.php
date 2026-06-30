@@ -42,6 +42,8 @@ class PnlRecord extends Model
         'classification_reason',
           'profit_loss',
               'total_pax',
+              'adult_count',  // ✅ Add this
+    'child_count',  // ✅ Add this
     'total_nights',
 
     ];

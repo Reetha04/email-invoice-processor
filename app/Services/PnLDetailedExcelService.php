@@ -148,78 +148,97 @@ class PnLDetailedExcelService
             }
             
             // ========== SECTION 3: PRODUCTS/ATTRACTIONS ==========
-            $attractionItems = $record->items->where('type', 'ATTRACTION');
-            $tourTransferItems = $record->items->where('type', 'TOUR TRANSFER');
-            $productItems = $attractionItems->merge($tourTransferItems);
-            
-            if ($productItems->isNotEmpty()) {
-                $sheet->setCellValue("A{$row}", 'PRODUCTS & ATTRACTIONS');
-                $sheet->mergeCells("A{$row}:H{$row}");
-                $sheet->getStyle("A{$row}:H{$row}")->applyFromArray([
-                    'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => 'FFFFFF']],
-                    'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '28A745']],
-                ]);
-                $row++;
-                
-                // Product Headers
-                $productHeaders = ['Name of Product', 'Adult Count', 'Adult Rate', 'Child Count', 'Child Rate', 'No. of Package', 'Package Cost', 'Total'];
-                $col = 'A';
-                foreach ($productHeaders as $header) {
-                    $sheet->setCellValue($col . $row, $header);
-                    $sheet->getStyle($col . $row)->applyFromArray([
-                        'font' => ['bold' => true],
-                        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'E8EDF2']],
-                    ]);
-                    $col++;
-                }
-                $row++;
-                
-                foreach ($productItems as $item) {
-                    $itemDetails = json_decode($item->item_details, true);
-                    $pax = $itemDetails['pax'] ?? $record->total_pax ?? 0;
-                    $adultRate = floatval($itemDetails['adult_rate'] ?? 0);
-                    $childRate = floatval($itemDetails['child_rate'] ?? 0);
-                    $transferAmount = floatval($itemDetails['transfer_amount'] ?? 0);
-                    $amount = floatval($item->amount_original);
-                    
-                    // Determine if it's transfer or attraction
-                    if ($transferAmount > 0) {
-                        // Tour Transfer
-                        $sheet->setCellValue("A{$row}", $item->service_name);
-                        $sheet->setCellValue("B{$row}", 0);
-                        $sheet->setCellValue("C{$row}", 0);
-                        $sheet->setCellValue("D{$row}", 0);
-                        $sheet->setCellValue("E{$row}", 0);
-                        $sheet->setCellValue("F{$row}", 1);
-                        $sheet->setCellValue("G{$row}", $this->safeNumberFormat($transferAmount, 2));
-                        $sheet->setCellValue("H{$row}", $this->safeNumberFormat($transferAmount, 2));
-                    } else {
-                        // Attraction
-                        $sheet->setCellValue("A{$row}", $item->service_name);
-                        $sheet->setCellValue("B{$row}", $pax);
-                        $sheet->setCellValue("C{$row}", $this->safeNumberFormat($adultRate, 2));
-                        $sheet->setCellValue("D{$row}", 0);
-                        $sheet->setCellValue("E{$row}", $this->safeNumberFormat($childRate, 2));
-                        $sheet->setCellValue("F{$row}", 0);
-                        $sheet->setCellValue("G{$row}", 0);
-                        $sheet->setCellValue("H{$row}", $this->safeNumberFormat(abs($amount), 2));
-                    }
-                    
-                    // Format as currency
-                    $sheet->getStyle("C{$row}:H{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
-                    $row++;
-                }
-                
-                // Product Grand Total
-                $productTotal = $productItems->sum(function($item) {
-                    return abs(floatval($item->amount_original));
-                });
-                $sheet->setCellValue("G{$row}", 'Grand Total');
-                $sheet->setCellValue("H{$row}", $this->safeNumberFormat($productTotal, 2));
-                $sheet->getStyle("G{$row}:H{$row}")->applyFromArray(['font' => ['bold' => true]]);
-                $sheet->getStyle("H{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
-                $row += 2;
+          // ========== SECTION 3: PRODUCTS/ATTRACTIONS ==========
+$attractionItems = $record->items->where('type', 'ATTRACTION');
+$tourTransferItems = $record->items->where('type', 'TOUR TRANSFER');
+$productItems = $attractionItems->merge($tourTransferItems);
+
+if ($productItems->isNotEmpty()) {
+    $sheet->setCellValue("A{$row}", 'PRODUCTS & ATTRACTIONS');
+    $sheet->mergeCells("A{$row}:H{$row}");
+    $sheet->getStyle("A{$row}:H{$row}")->applyFromArray([
+        'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => 'FFFFFF']],
+        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => '28A745']],
+    ]);
+    $row++;
+    
+    // Product Headers
+    $productHeaders = ['Name of Product', 'Adult Count', 'Adult Rate', 'Child Count', 'Child Rate', 'No. of Package', 'Package Cost', 'Total'];
+    $col = 'A';
+    foreach ($productHeaders as $header) {
+        $sheet->setCellValue($col . $row, $header);
+        $sheet->getStyle($col . $row)->applyFromArray([
+            'font' => ['bold' => true],
+            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'E8EDF2']],
+        ]);
+        $col++;
+    }
+    $row++;
+    
+    foreach ($productItems as $item) {
+        $itemDetails = json_decode($item->item_details, true);
+        $adultCount = $itemDetails['adult_count'] ?? $record->adult_count ?? 0;
+        $childCount = $itemDetails['child_count'] ?? $record->child_count ?? 0;
+        $adultRate = floatval($itemDetails['adult_rate'] ?? 0);
+        $childRate = floatval($itemDetails['child_rate'] ?? 0);
+        $transferAmount = floatval($itemDetails['transfer_amount'] ?? 0);
+        $amount = floatval($item->amount_original);
+        $pax = $itemDetails['pax'] ?? $record->total_pax ?? 0;
+        $adultEntrance = $itemDetails['adult_entrance'] ?? 0;
+        $childEntrance = $itemDetails['child_entrance'] ?? 0;
+        
+        // ✅ For TOUR TRANSFER - Show Adult Count × Adult Rate
+        if ($item->type === 'TOUR TRANSFER') {
+            // ✅ If adult_rate exists, show Adult Count × Adult Rate
+            if ($adultRate > 0 && $pax > 0) {
+                $sheet->setCellValue("A{$row}", $item->service_name);
+                $sheet->setCellValue("B{$row}", $adultCount);  // ✅ Use adult_count from record
+                $sheet->setCellValue("C{$row}", $this->safeNumberFormat($adultRate, 2));
+                $sheet->setCellValue("D{$row}", $childCount);  // ✅ Use child_count from record
+                $sheet->setCellValue("E{$row}", $this->safeNumberFormat($childRate, 2));
+                $sheet->setCellValue("F{$row}", 0);
+                $sheet->setCellValue("G{$row}", 0);
+                $sheet->setCellValue("H{$row}", $this->safeNumberFormat(abs($amount), 2));
+            } 
+            // ✅ If no adult_rate but transfer_amount exists (fallback)
+            else if ($transferAmount > 0) {
+                $sheet->setCellValue("A{$row}", $item->service_name);
+                $sheet->setCellValue("B{$row}", 0);
+                $sheet->setCellValue("C{$row}", 0);
+                $sheet->setCellValue("D{$row}", 0);
+                $sheet->setCellValue("E{$row}", 0);
+                $sheet->setCellValue("F{$row}", 1);
+                $sheet->setCellValue("G{$row}", $this->safeNumberFormat($transferAmount, 2));
+                $sheet->setCellValue("H{$row}", $this->safeNumberFormat($transferAmount, 2));
             }
+        } 
+        // ✅ For ATTRACTION
+        else if ($item->type === 'ATTRACTION') {
+            $sheet->setCellValue("A{$row}", $item->service_name);
+            $sheet->setCellValue("B{$row}", $adultCount);  // ✅ Use adult_count from record
+            $sheet->setCellValue("C{$row}", $this->safeNumberFormat($adultRate, 2));
+            $sheet->setCellValue("D{$row}", $childCount);  // ✅ Use child_count from record
+            $sheet->setCellValue("E{$row}", $this->safeNumberFormat($childRate, 2));
+            $sheet->setCellValue("F{$row}", 0);
+            $sheet->setCellValue("G{$row}", 0);
+            $sheet->setCellValue("H{$row}", $this->safeNumberFormat(abs($amount), 2));
+        }
+        
+        // Format as currency
+        $sheet->getStyle("C{$row}:H{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
+        $row++;
+    }
+    
+    // Product Grand Total
+    $productTotal = $productItems->sum(function($item) {
+        return abs(floatval($item->amount_original));
+    });
+    $sheet->setCellValue("G{$row}", 'Grand Total');
+    $sheet->setCellValue("H{$row}", $this->safeNumberFormat($productTotal, 2));
+    $sheet->getStyle("G{$row}:H{$row}")->applyFromArray(['font' => ['bold' => true]]);
+    $sheet->getStyle("H{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
+    $row += 2;
+}
             
             // ========== SECTION 4: OTHER RATES ==========
             $otherRateItems = $record->items->where('type', 'OTHER RATES');
@@ -513,40 +532,62 @@ class PnLDetailedExcelService
             }
             
             // ========== PRODUCTS & ATTRACTIONS ==========
-            $productItems = $record->items->whereIn('type', ['ATTRACTION', 'TOUR TRANSFER']);
-            if ($productItems->isNotEmpty()) {
-                $html .= '<h4 class="mt-4" style="background:#28A745;color:#fff;padding:8px;">PRODUCTS & ATTRACTIONS</h4>';
-                $html .= '<table class="table table-bordered table-striped table-sm">';
-                $html .= '<thead><tr><th>Name</th><th>Adult Count</th><th>Adult Rate</th><th>Child Count</th><th>Child Rate</th><th>Package</th><th>Package Cost</th><th>Total</th></tr></thead><tbody>';
-                foreach ($productItems as $item) {
-                    $itemDetails = json_decode($item->item_details, true);
-                    $pax = $itemDetails['pax'] ?? 0;
-                    $adultRate = floatval($itemDetails['adult_rate'] ?? 0);
-                    $childRate = floatval($itemDetails['child_rate'] ?? 0);
-                    $transferAmount = floatval($itemDetails['transfer_amount'] ?? 0);
-                    $amount = floatval($item->amount_original);
-                    
-                    $html .= '<tr>';
-                    $html .= '<td>' . ($item->service_name ?? '-') . '</td>';
-                    if ($transferAmount > 0) {
-                        $html .= '<td>0</td><td>0</td><td>0</td><td>0</td><td>1</td>';
-                        $html .= '<td>' . $this->formatCurrency($transferAmount, 'USD') . '</td>';
-                        $html .= '<td>' . $this->formatCurrency($transferAmount, 'USD') . '</td>';
-                    } else {
-                        $html .= '<td>' . $pax . '</td>';
-                        $html .= '<td>' . $this->formatCurrency($adultRate, 'USD') . '</td>';
-                        $html .= '<td>0</td>';
-                        $html .= '<td>' . $this->formatCurrency($childRate, 'USD') . '</td>';
-                        $html .= '<td>0</td>';
-                        $html .= '<td>0</td>';
-                        $html .= '<td>' . $this->formatCurrency(abs($amount), 'USD') . '</td>';
-                    }
-                    $html .= '</tr>';
-                }
-                $productTotal = $productItems->sum(fn($item) => abs(floatval($item->amount_original)));
-                $html .= '<tr class="fw-bold"><td colspan="7">Grand Total</td><td>' . $this->formatCurrency($productTotal, 'USD') . '</td></tr>';
-                $html .= '</tbody></table>';
+          // ========== PRODUCTS & ATTRACTIONS ==========
+$productItems = $record->items->whereIn('type', ['ATTRACTION', 'TOUR TRANSFER']);
+if ($productItems->isNotEmpty()) {
+    $html .= '<h4 class="mt-4" style="background:#28A745;color:#fff;padding:8px;">PRODUCTS & ATTRACTIONS</h4>';
+    $html .= '<table class="table table-bordered table-striped table-sm">';
+    $html .= '<thead><tr><th>Name</th><th>Adult Count</th><th>Adult Rate</th><th>Child Count</th><th>Child Rate</th><th>Package</th><th>Package Cost</th><th>Total</th></tr></thead><tbody>';
+    
+    foreach ($productItems as $item) {
+        $itemDetails = json_decode($item->item_details, true);
+        $adultCount = $itemDetails['adult_count'] ?? $record->adult_count ?? 0;
+        $childCount = $itemDetails['child_count'] ?? $record->child_count ?? 0;
+        $adultRate = floatval($itemDetails['adult_rate'] ?? 0);
+        $childRate = floatval($itemDetails['child_rate'] ?? 0);
+        $transferAmount = floatval($itemDetails['transfer_amount'] ?? 0);
+        $amount = floatval($item->amount_original);
+        $pax = $itemDetails['pax'] ?? $record->total_pax ?? 0;
+        $adultEntrance = $itemDetails['adult_entrance'] ?? 0;
+        $childEntrance = $itemDetails['child_entrance'] ?? 0;
+        
+        $html .= '<tr>';
+        $html .= '<td>' . ($item->service_name ?? '-') . '</td>';
+        
+        // ✅ For TOUR TRANSFER - Show Adult Count × Adult Rate
+        if ($item->type === 'TOUR TRANSFER') {
+            if ($adultRate > 0 && $pax > 0) {
+                $html .= '<td>' . $adultCount . '</td>';
+                $html .= '<td>' . $this->formatCurrency($adultRate, 'USD') . '</td>';
+                $html .= '<td>' . $childCount . '</td>';
+                $html .= '<td>' . $this->formatCurrency($childRate, 'USD') . '</td>';
+                $html .= '<td>0</td>';
+                $html .= '<td>0</td>';
+                $html .= '<td>' . $this->formatCurrency(abs($amount), 'USD') . '</td>';
+            } else if ($transferAmount > 0) {
+                $html .= '<td>0</td><td>0</td><td>0</td><td>0</td><td>1</td>';
+                $html .= '<td>' . $this->formatCurrency($transferAmount, 'USD') . '</td>';
+                $html .= '<td>' . $this->formatCurrency($transferAmount, 'USD') . '</td>';
             }
+        } 
+        // ✅ For ATTRACTION
+        else if ($item->type === 'ATTRACTION') {
+            $html .= '<td>' . $adultCount . '</td>';
+            $html .= '<td>' . $this->formatCurrency($adultRate, 'USD') . '</td>';
+            $html .= '<td>' . $childCount . '</td>';
+            $html .= '<td>' . $this->formatCurrency($childRate, 'USD') . '</td>';
+            $html .= '<td>0</td>';
+            $html .= '<td>0</td>';
+            $html .= '<td>' . $this->formatCurrency(abs($amount), 'USD') . '</td>';
+        }
+        
+        $html .= '</tr>';
+    }
+    
+    $productTotal = $productItems->sum(fn($item) => abs(floatval($item->amount_original)));
+    $html .= '<tr class="fw-bold"><td colspan="7">Grand Total</td><td>' . $this->formatCurrency($productTotal, 'USD') . '</td></tr>';
+    $html .= '</tbody></table>';
+}
             
             // ========== OTHER RATES ==========
             $otherRateItems = $record->items->where('type', 'OTHER RATES');
