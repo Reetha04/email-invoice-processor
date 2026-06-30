@@ -115,91 +115,88 @@
                     </div>
                 </div>
 
-                <!-- Filter Section -->
-                <div class="filter-section mb-4">
-                    <form method="GET" action="{{ route('index') }}" id="filterForm">
-                        <div class="row g-3">
-                           <div class="col-md-4">
-    <label class="form-label">Search</label>
-    <div class="input-group">
-        <span class="input-group-text bg-white border-end-0">
-            <i class="fas fa-search text-secondary"></i>
-        </span>
-        <input type="text" name="search" class="form-control border-start-0"
-            placeholder="Invoice #, Tour Ref, Agent, File Handler, Sales Person..." value="{{ request('search') }}">
-    </div>
-</div>
-
-                            <div class="col-md-2">
-                                <label class="form-label">Credit Type</label>
-                                <select name="credit_type" class="form-select">
-                                    <option value="all" {{ request('credit_type') == 'all' ? 'selected' : '' }}>All
-                                    </option>
-                                    <option value="credit" {{ request('credit_type') == 'credit' ? 'selected' : '' }}>
-                                        Credit</option>
-                                    <option value="non_credit"
-                                        {{ request('credit_type') == 'non_credit' ? 'selected' : '' }}>Non-Credit</option>
-                                </select>
-                            </div>
-
-                            <div class="col-md-2">
-                                <label class="form-label">Status</label>
-                                <select name="read_status" class="form-select">
-                                    <option value="all" {{ request('read_status') == 'all' ? 'selected' : '' }}>All
-                                    </option>
-                                    <option value="read" {{ request('read_status') == 'read' ? 'selected' : '' }}>Read
-                                    </option>
-                                    <option value="unread" {{ request('read_status') == 'unread' ? 'selected' : '' }}>
-                                        Unread</option>
-                                </select>
-                            </div>
-
-                            <div class="col-md-2">
-                                <label class="form-label">From Date</label>
-                                <input type="date" name="date_from" class="form-control"
-                                    value="{{ request('date_from') }}">
-                            </div>
-
-                            <div class="col-md-2">
-                                <label class="form-label">To Date</label>
-                                <input type="date" name="date_to" class="form-control"
-                                    value="{{ request('date_to') }}">
-                            </div>
-
-                            <div class="col-12">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-filter me-1"></i> Apply Filters
-                                </button>
-                                <a href="{{ route('index') }}" class="btn btn-secondary">
-                                    <i class="fas fa-undo me-1"></i> Reset
-                                </a>
-                            </div>
-                        </div>
-                    </form>
+              <!-- Filter Section -->
+<div class="filter-section mb-4">
+    <form method="GET" action="{{ route('index') }}" id="filterForm">
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Search</label>
+                <div class="input-group">
+                    <span class="input-group-text bg-white border-end-0">
+                        <i class="fas fa-search text-secondary"></i>
+                    </span>
+                    <input type="text" name="search" id="searchInput" class="form-control border-start-0 border-end-0"
+                        placeholder="Invoice #, Tour Ref, Agent, File Handler, Sales Person..."
+                        value="{{ request('search') }}">
+                    <button type="button" id="clearSearchBtn" class="btn btn-outline-secondary border-start-0" 
+                        style="{{ request('search') ? '' : 'display: none;' }}">
+                        <i class="fas fa-times"></i>
+                    </button>
                 </div>
+            </div>
+
+            <div class="col-md-2">
+                <label class="form-label">Credit Type</label>
+                <select name="credit_type" class="form-select">
+                    <option value="all" {{ request('credit_type') == 'all' ? 'selected' : '' }}>All</option>
+                    <option value="credit" {{ request('credit_type') == 'credit' ? 'selected' : '' }}>Credit</option>
+                    <option value="non_credit" {{ request('credit_type') == 'non_credit' ? 'selected' : '' }}>Non-Credit</option>
+                </select>
+            </div>
+
+            <div class="col-md-2">
+                <label class="form-label">Status</label>
+                <select name="read_status" class="form-select">
+                    <option value="all" {{ request('read_status') == 'all' ? 'selected' : '' }}>All</option>
+                    <option value="read" {{ request('read_status') == 'read' ? 'selected' : '' }}>Read</option>
+                    <option value="unread" {{ request('read_status') == 'unread' ? 'selected' : '' }}>Unread</option>
+                </select>
+            </div>
+
+            <div class="col-md-2">
+                <label class="form-label">From Date</label>
+                <input type="date" name="date_from" class="form-control" value="{{ request('date_from') }}">
+            </div>
+
+            <div class="col-md-2">
+                <label class="form-label">To Date</label>
+                <input type="date" name="date_to" class="form-control" value="{{ request('date_to') }}">
+            </div>
+
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-filter me-1"></i> Apply Filters
+                </button>
+                <a href="{{ route('index') }}" class="btn btn-secondary">
+                    <i class="fas fa-undo me-1"></i> Reset
+                </a>
+            </div>
+        </div>
+    </form>
+</div>
 
                 <!-- Emails Table -->
                 <div class="table-responsive">
                     <table class="table table-hover">
-                      <thead>
-    <tr>
-        <th>#</th>
-        <th>Received</th>
-        <th>From</th>
-        <th>Subject</th>
-        <th>Travel Start</th>
-        <th>Travel End</th>
-        <th>Handler</th>
-        <th>Agent</th>
-        <th>Invoice No</th>
-        <th>Tour Ref</th>
-        <th>Agent ID</th>
-        <th>Sales Person</th>
-        <th>Amount</th>
-        <th>Type</th>
-        <th>Actions</th>
-    </tr>
-</thead>
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Received</th>
+                                <th>From</th>
+                                <th>Subject</th>
+                                <th>Travel Start</th>
+                                <th>Travel End</th>
+                                <th>Handler</th>
+                                <th>Agent</th>
+                                <th>Invoice No</th>
+                                <th>Tour Ref</th>
+                                <th>Agent ID</th>
+                                <th>Sales Person</th>
+                                <th>Amount</th>
+                                <th>Type</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
                         <tbody>
                             @forelse($emails as $index => $email)
                                 <tr class="email-row" data-email-id="{{ $email->id }}" style="cursor: pointer;">
@@ -218,20 +215,20 @@
                                             <span class="badge-credit mt-1 d-inline-block">Confirmation</span>
                                         @endif
                                     </td>
-                                 <td>
-    @if ($email->travel_start_date)
-        {{ \Carbon\Carbon::parse($email->travel_start_date)->format('d/m/Y') }}
-    @else
-        <span class="text-muted">-</span>
-    @endif
-</td>
-<td>
-    @if ($email->travel_end_date)
-        {{ \Carbon\Carbon::parse($email->travel_end_date)->format('d/m/Y') }}
-    @else
-        <span class="text-muted">-</span>
-    @endif
-</td>
+                                    <td>
+                                        @if ($email->travel_start_date)
+                                            {{ \Carbon\Carbon::parse($email->travel_start_date)->format('d/m/Y') }}
+                                        @else
+                                            <span class="text-muted">-</span>
+                                        @endif
+                                    </td>
+                                    <td>
+                                        @if ($email->travel_end_date)
+                                            {{ \Carbon\Carbon::parse($email->travel_end_date)->format('d/m/Y') }}
+                                        @else
+                                            <span class="text-muted">-</span>
+                                        @endif
+                                    </td>
                                     <td>{{ $email->file_handler ?: '-' }}</td>
                                     <td class="fw-semibold">{{ $email->agent_name ?: '-' }}</td>
                                     <td>
@@ -266,36 +263,37 @@
                                             <span class="badge-pending">Pending</span>
                                         @endif
                                     </td>
-                                   <td onclick="event.stopPropagation()">
-    <div class="action-buttons">
-        @if ($email->invoice)
-            <!-- View Invoice -->
-            <a href="{{ route('invoice.view', $email->invoice->id) }}"
-                class="btn btn-success btn-sm" target="_blank" title="View Invoice">
-                <i class="fas fa-eye"></i>
-            </a>
-            <!-- Download Invoice -->
-            <a href="{{ route('invoice.download', $email->invoice->id) }}"
-                class="btn btn-secondary btn-sm" title="Download Invoice">
-                <i class="fas fa-download"></i>
-            </a>
-        @else
-            <!-- No invoice yet - show waiting status -->
-            <span class="badge bg-warning text-dark" title="Invoice will be generated automatically">
-                <i class="fas fa-clock me-1"></i> Processing
-            </span>
-        @endif
-    </div>
-</td>
+                                    <td onclick="event.stopPropagation()">
+                                        <div class="action-buttons">
+                                            @if ($email->invoice)
+                                                <!-- View Invoice -->
+                                                <a href="{{ route('invoice.view', $email->invoice->id) }}"
+                                                    class="btn btn-success btn-sm" target="_blank" title="View Invoice">
+                                                    <i class="fas fa-eye"></i>
+                                                </a>
+                                                <!-- Download Invoice -->
+                                                <a href="{{ route('invoice.download', $email->invoice->id) }}"
+                                                    class="btn btn-secondary btn-sm" title="Download Invoice">
+                                                    <i class="fas fa-download"></i>
+                                                </a>
+                                            @else
+                                                <!-- No invoice yet - show waiting status -->
+                                                <span class="badge bg-warning text-dark"
+                                                    title="Invoice will be generated automatically">
+                                                    <i class="fas fa-clock me-1"></i> Processing
+                                                </span>
+                                            @endif
+                                        </div>
+                                    </td>
                                 </tr>
                             @empty
                                 <tr>
                                     <td colspan="15" class="text-center py-5">
                                         <i class="fas fa-inbox fa-3x text-secondary mb-3 d-block"></i>
                                         <p class="text-muted mb-0">No emails found</p>
-                                        <button type="submit" form="fetchForm" class="btn btn-accent mt-3">
+                                        {{-- <button type="submit" form="fetchForm" class="btn btn-accent mt-3">
                                             <i class="fas fa-sync-alt me-1"></i> Fetch Emails
-                                        </button>
+                                        </button> --}}
                                     </td>
                                 </tr>
                             @endforelse
@@ -443,312 +441,496 @@
             padding: 4px;
             border-radius: 4px;
         }
+
+        /* Quick fix: Add padding to show the number */
+        .pagination-wrapper .form-select,
+        .d-flex.justify-content-between .form-select {
+            padding-right: 2rem !important;
+            min-width: 75px !important;
+        }
+            .loading-active {
+        overflow: hidden !important;
+        height: 100vh !important;
+        position: fixed !important;
+        width: 100% !important;
+        top: 0 !important;
+        left: 0 !important;
+    }
+    
+    /* Loading overlay styles */
+    #loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 9999;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+    }
+    
+    #loading-overlay .spinner-border {
+        width: 4rem;
+        height: 4rem;
+        border-width: 0.3rem;
+    }
+    
+    #loading-overlay p {
+        color: #fff;
+        margin-top: 1.5rem;
+        font-size: 1.1rem;
+        font-weight: 500;
+        letter-spacing: 0.5px;
+    }
+    /* Search clear button styling */
+#clearSearchBtn {
+    background-color: white;
+    border-color: #ced4da;
+    color: #6c757d;
+    z-index: 3;
+    border-left: 0;
+    padding: 0.375rem 0.75rem;
+}
+
+#clearSearchBtn:hover {
+    background-color: #f8f9fa;
+    color: #dc3545;
+}
+
+#clearSearchBtn i {
+    pointer-events: none;
+}
+
+/* Better input group styling */
+.input-group .form-control:focus {
+    border-color: #86b7fe;
+    box-shadow: none;
+}
+
+.input-group .form-control:focus + #clearSearchBtn {
+    border-color: #86b7fe;
+    border-left-color: #ced4da;
+}
+
+/* Optional: Add some margin if needed */
+.input-group .form-control {
+    border-right: 1px solid #ced4da;
+}
+
+/* Make sure the clear button doesn't overlap */
+#clearSearchBtn {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-top-right-radius: 0.375rem;
+    border-bottom-right-radius: 0.375rem;
+}
     </style>
 
-    @push('scripts')
-        <script>
-            $(document).ready(function() {
-                let currentEmailId = null;
+  @push('scripts')
+<script>
+    $(document).ready(function() {
+        let currentEmailId = null;
 
-                // Click on email row to view full content
-                $('.email-row').click(function() {
-                    const emailId = $(this).data('email-id');
-                    currentEmailId = emailId;
+        // ====== HANDLE FETCH & PROCESS FORM ======
+        $('form[action="{{ route('process') }}"]').on('submit', function(e) {
+            e.preventDefault();
+            
+            const form = this;
+            const button = $(form).find('button[type="submit"]');
+            
+            // Disable button and show loading text
+            button.prop('disabled', true);
+            button.html('<i class="fas fa-spinner fa-spin me-1"></i> Processing...');
+            
+            // Prevent scrolling
+            $('body').addClass('loading-active');
+            
+            // Show loading overlay
+            showLoadingOverlay('Fetching and processing emails...');
+            
+            // Submit the form after a small delay
+            setTimeout(function() {
+                form.submit();
+            }, 300);
+        });
 
-                    $('#emailModal').modal('show');
-                    $('#modalBody').html(
-                        '<div class="text-center py-5"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>'
-                    );
+        // ====== HANDLE FILTER FORM ======
+        $('#filterForm').on('submit', function(e) {
+            e.preventDefault();
+            
+            const form = this;
+            const button = $(form).find('button[type="submit"]');
+            const originalText = button.html();
+            
+            // Disable button and show loading
+            button.prop('disabled', true);
+            button.html('<i class="fas fa-spinner fa-spin me-1"></i> Applying Filters...');
+            
+            // Prevent scrolling
+            $('body').addClass('loading-active');
+            
+            // Show loading overlay
+            showLoadingOverlay('Applying filters...');
+            
+            // Submit the form after a small delay
+            setTimeout(function() {
+                form.submit();
+            }, 300);
+        });
 
-                    $.ajax({
-                        url: '{{ route('email.view') }}',
-                        method: 'GET',
-                        data: {
-                            id: emailId
-                        },
-                        success: function(response) {
-                            if (response.success) {
-                                $('#modalSubject').text(response.email.subject);
-                                let emailContent = response.email.body ||
-                                    '<p>No content available</p>';
+        // ====== HANDLE PER PAGE SELECTOR ======
+        $('select.form-select-sm').on('change', function() {
+            // Prevent scrolling
+            $('body').addClass('loading-active');
+            
+            // Show loading overlay
+            showLoadingOverlay('Loading data...');
+            
+            // The page will reload when the URL changes
+            // The loading state will be removed on page reload
+        });
 
-                                $('#modalBody').html(`
-                        <div class="email-meta">
-                            <p><strong>From:</strong> ${escapeHtml(response.email.from_name || '-')} &lt;${escapeHtml(response.email.from_email)}&gt;</p>
-                            <p><strong>Received:</strong> ${response.email.received_at}</p>
-                            <p><strong>Subject:</strong> ${escapeHtml(response.email.subject)}</p>
-                            ${response.email.agent_name ? `<p><strong>Agent:</strong> ${escapeHtml(response.email.agent_name)}</p>` : ''}
-                            ${response.email.invoice_number ? `<p><strong>Invoice No:</strong> ${escapeHtml(response.email.invoice_number)}</p>` : ''}
-                            ${response.email.tour_ref ? `<p><strong>Tour Ref:</strong> ${escapeHtml(response.email.tour_ref)}</p>` : ''}
-                            ${response.email.file_handler ? `<p><strong>Sales Person:</strong> ${escapeHtml(response.email.file_handler)}</p>` : ''}
+        // ====== HANDLE PAGINATION LINKS ======
+        $(document).on('click', '.pagination a', function(e) {
+            e.preventDefault();
+            
+            const url = $(this).attr('href');
+            if (url && url !== '#') {
+                // Prevent scrolling
+                $('body').addClass('loading-active');
+                
+                // Show loading overlay
+                showLoadingOverlay('Loading page...');
+                
+                // Navigate to the URL
+                window.location.href = url;
+            }
+        });
+
+        // ====== HANDLE RESET BUTTON ======
+        $('a[href="{{ route('index') }}"]').on('click', function(e) {
+            e.preventDefault();
+            
+            const url = $(this).attr('href');
+            
+            // Prevent scrolling
+            $('body').addClass('loading-active');
+            
+            // Show loading overlay
+            showLoadingOverlay('Resetting filters...');
+            
+            // Navigate to the URL
+            window.location.href = url;
+        });
+
+        // ====== LOADING OVERLAY FUNCTIONS ======
+        function showLoadingOverlay(message = 'Loading...') {
+            if ($('#loading-overlay').length === 0) {
+                $('body').append(`
+                    <div id="loading-overlay">
+                        <div class="spinner-border text-light" role="status">
+                            <span class="visually-hidden">Loading...</span>
                         </div>
-                        <div class="email-content">
-                            ${emailContent}
-                        </div>
-                    `);
-                            }
-                        },
-                        error: function() {
-                            $('#modalBody').html(
-                                '<div class="alert alert-danger m-3">Failed to load email content</div>'
-                            );
-                        }
-                    });
-                });
+                        <p id="loading-message">${message}</p>
+                    </div>
+                `);
+            } else {
+                $('#loading-message').text(message);
+                $('#loading-overlay').show();
+            }
+        }
 
-                // Generate invoice directly - NO MODAL
-                $('#modalGenerateBtn').off('click').on('click', function() {
-                    if (currentEmailId) {
-                        generateInvoice(currentEmailId);
+        function hideLoadingOverlay() {
+            $('#loading-overlay').hide();
+            $('body').removeClass('loading-active');
+        }
+
+        // Hide overlay if page loads and it's still visible (safety net)
+        $(window).on('load', function() {
+            hideLoadingOverlay();
+        });
+
+        // ====== EXISTING EMAIL MODAL CODE ======
+        // Click on email row to view full content
+        $('.email-row').click(function() {
+            const emailId = $(this).data('email-id');
+            currentEmailId = emailId;
+
+            $('#emailModal').modal('show');
+            $('#modalBody').html(
+                '<div class="text-center py-5"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>'
+            );
+
+            $.ajax({
+                url: '{{ route('email.view') }}',
+                method: 'GET',
+                data: { id: emailId },
+                success: function(response) {
+                    if (response.success) {
+                        $('#modalSubject').text(response.email.subject);
+                        let emailContent = response.email.body || '<p>No content available</p>';
+
+                        $('#modalBody').html(`
+                            <div class="email-meta">
+                                <p><strong>From:</strong> ${escapeHtml(response.email.from_name || '-')} &lt;${escapeHtml(response.email.from_email)}&gt;</p>
+                                <p><strong>Received:</strong> ${response.email.received_at}</p>
+                                <p><strong>Subject:</strong> ${escapeHtml(response.email.subject)}</p>
+                                ${response.email.agent_name ? `<p><strong>Agent:</strong> ${escapeHtml(response.email.agent_name)}</p>` : ''}
+                                ${response.email.invoice_number ? `<p><strong>Invoice No:</strong> ${escapeHtml(response.email.invoice_number)}</p>` : ''}
+                                ${response.email.tour_ref ? `<p><strong>Tour Ref:</strong> ${escapeHtml(response.email.tour_ref)}</p>` : ''}
+                                ${response.email.file_handler ? `<p><strong>Sales Person:</strong> ${escapeHtml(response.email.file_handler)}</p>` : ''}
+                            </div>
+                            <div class="email-content">
+                                ${emailContent}
+                            </div>
+                        `);
                     }
-                });
-
-                function escapeHtml(text) {
-                    if (!text) return '';
-                    return text.replace(/[&<>]/g, function(m) {
-                        if (m === '&') return '&amp;';
-                        if (m === '<') return '&lt;';
-                        if (m === '>') return '&gt;';
-                        return m;
-                    });
+                },
+                error: function() {
+                    $('#modalBody').html(
+                        '<div class="alert alert-danger m-3">Failed to load email content</div>'
+                    );
                 }
             });
+        });
 
-            // Generate invoice from table row - DIRECT, NO MODAL
-            function generateAndViewInvoice(button) {
-                const emailId = $(button).data('email-id');
-                generateInvoice(emailId, button);
+        // ====== UTILITY FUNCTIONS ======
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.replace(/[&<>]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                return m;
+            });
+        }
+
+        // ====== INVOICE GENERATION FUNCTIONS ======
+        function generateAndViewInvoice(button) {
+            const emailId = $(button).data('email-id');
+            generateInvoice(emailId, button);
+        }
+
+        function generateInvoice(emailId, button = null) {
+            const $button = button ? $(button) : null;
+            const originalHtml = $button ? $button.html() : '';
+
+            if ($button) {
+                $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Checking...');
             }
 
-            function generateInvoice(emailId, button = null) {
-                const $button = button ? $(button) : null;
-                const originalHtml = $button ? $button.html() : '';
+            $.ajax({
+                url: '{{ route('get.email.invoice.number') }}',
+                method: 'GET',
+                data: { email_id: emailId },
+                dataType: 'json',
+                success: function(emailResponse) {
+                    if (emailResponse.success) {
+                        const invoiceNumber = emailResponse.invoice_number;
+                        const tourRef = emailResponse.tour_ref;
 
-                if ($button) {
-                    $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Checking...');
-                }
-
-                // Get email details - both invoice_number and tour_ref
-                $.ajax({
-                    url: '{{ route('get.email.invoice.number') }}',
-                    method: 'GET',
-                    data: {
-                        email_id: emailId
-                    },
-                    dataType: 'json',
-                    success: function(emailResponse) {
-                        if (emailResponse.success) {
-                            const invoiceNumber = emailResponse.invoice_number;
-                            const tourRef = emailResponse.tour_ref;
-
-                            // Check by invoice_number AND tour_ref
-                            $.ajax({
-                                url: '{{ route('check.invoice.by.number') }}',
-                                method: 'GET',
-                                data: {
-                                    invoice_number: invoiceNumber,
-                                    tour_ref: tourRef
-                                },
-                                dataType: 'json',
-                                success: function(response) {
-                                    if (response.exists) {
-                                        // Create revision
-                                        if ($button) {
-                                            $button.html(
-                                                '<i class="fas fa-spinner fa-spin"></i> Creating Revision...'
-                                            );
-                                        }
-
-                                        $.ajax({
-                                            url: '{{ route('regenerate.invoice') }}',
-                                            method: 'POST',
-                                            data: {
-                                                email_id: emailId,
-                                                _token: '{{ csrf_token() }}'
-                                            },
-                                            dataType: 'json',
-                                            success: function(response) {
-                                                if (response.success) {
-                                                    window.open(
-                                                        '{{ url('/invoice/view') }}/' +
-                                                        response.invoice_id, '_blank');
-                                                    toastr.success('✅ Revision R' + response
-                                                        .revision_number + ' created!');
-                                                    setTimeout(() => location.reload(),
-                                                        1500);
-                                                } else {
-                                                    toastr.error(response.message ||
-                                                        'Failed to create revision');
-                                                    if ($button) $button.prop('disabled',
-                                                        false).html(originalHtml);
-                                                }
-                                            },
-                                            error: function(xhr) {
-                                                let errorMsg = 'Error creating revision';
-                                                if (xhr.responseJSON && xhr.responseJSON
-                                                    .message) errorMsg = xhr.responseJSON
-                                                    .message;
-                                                toastr.error(errorMsg);
-                                                if ($button) $button.prop('disabled', false)
-                                                    .html(originalHtml);
-                                            }
-                                        });
-                                    } else {
-                                        // No invoice exists - create new
-                                        if ($button) {
-                                            $button.html(
-                                                '<i class="fas fa-spinner fa-spin"></i> Generating...'
-                                            );
-                                        }
-
-                                        $.ajax({
-                                            url: '{{ route('generate.and.view.invoice') }}',
-                                            method: 'POST',
-                                            data: {
-                                                email_id: emailId,
-                                                _token: '{{ csrf_token() }}'
-                                            },
-                                            dataType: 'json',
-                                            success: function(response) {
-                                                if (response.success) {
-                                                    window.open(
-                                                        '{{ url('/invoice/view') }}/' +
-                                                        response.invoice_id, '_blank');
-                                                    toastr.success(
-                                                        '✅ Invoice generated with auto GST!'
-                                                    );
-                                                    setTimeout(() => location.reload(),
-                                                        1500);
-                                                } else {
-                                                    toastr.error(response.message ||
-                                                        'Failed to generate invoice');
-                                                    if ($button) $button.prop('disabled',
-                                                        false).html(originalHtml);
-                                                }
-                                            },
-                                            error: function(xhr) {
-                                                let errorMsg = 'Error generating invoice';
-                                                if (xhr.responseJSON && xhr.responseJSON
-                                                    .message) errorMsg = xhr.responseJSON
-                                                    .message;
-                                                toastr.error(errorMsg);
-                                                if ($button) $button.prop('disabled', false)
-                                                    .html(originalHtml);
-                                            }
-                                        });
+                        $.ajax({
+                            url: '{{ route('check.invoice.by.number') }}',
+                            method: 'GET',
+                            data: { invoice_number: invoiceNumber, tour_ref: tourRef },
+                            dataType: 'json',
+                            success: function(response) {
+                                if (response.exists) {
+                                    if ($button) {
+                                        $button.html('<i class="fas fa-spinner fa-spin"></i> Creating Revision...');
                                     }
-                                },
-                                error: function() {
-                                    toastr.error('Error checking invoice by number');
-                                    if ($button) $button.prop('disabled', false).html(originalHtml);
+
+                                    $.ajax({
+                                        url: '{{ route('regenerate.invoice') }}',
+                                        method: 'POST',
+                                        data: {
+                                            email_id: emailId,
+                                            _token: '{{ csrf_token() }}'
+                                        },
+                                        dataType: 'json',
+                                        success: function(response) {
+                                            if (response.success) {
+                                                window.open('{{ url('/invoice/view') }}/' + response.invoice_id, '_blank');
+                                                toastr.success('✅ Revision R' + response.revision_number + ' created!');
+                                                setTimeout(() => location.reload(), 1500);
+                                            } else {
+                                                toastr.error(response.message || 'Failed to create revision');
+                                                if ($button) $button.prop('disabled', false).html(originalHtml);
+                                            }
+                                        },
+                                        error: function(xhr) {
+                                            let errorMsg = 'Error creating revision';
+                                            if (xhr.responseJSON && xhr.responseJSON.message) errorMsg = xhr.responseJSON.message;
+                                            toastr.error(errorMsg);
+                                            if ($button) $button.prop('disabled', false).html(originalHtml);
+                                        }
+                                    });
+                                } else {
+                                    if ($button) {
+                                        $button.html('<i class="fas fa-spinner fa-spin"></i> Generating...');
+                                    }
+
+                                    $.ajax({
+                                        url: '{{ route('generate.and.view.invoice') }}',
+                                        method: 'POST',
+                                        data: {
+                                            email_id: emailId,
+                                            _token: '{{ csrf_token() }}'
+                                        },
+                                        dataType: 'json',
+                                        success: function(response) {
+                                            if (response.success) {
+                                                window.open('{{ url('/invoice/view') }}/' + response.invoice_id, '_blank');
+                                                toastr.success('✅ Invoice generated with auto GST!');
+                                                setTimeout(() => location.reload(), 1500);
+                                            } else {
+                                                toastr.error(response.message || 'Failed to generate invoice');
+                                                if ($button) $button.prop('disabled', false).html(originalHtml);
+                                            }
+                                        },
+                                        error: function(xhr) {
+                                            let errorMsg = 'Error generating invoice';
+                                            if (xhr.responseJSON && xhr.responseJSON.message) errorMsg = xhr.responseJSON.message;
+                                            toastr.error(errorMsg);
+                                            if ($button) $button.prop('disabled', false).html(originalHtml);
+                                        }
+                                    });
                                 }
-                            });
-                        } else {
-                            toastr.error('Could not get invoice number');
-                            if ($button) $button.prop('disabled', false).html(originalHtml);
-                        }
-                    },
-                    error: function() {
-                        toastr.error('Error fetching email details');
+                            },
+                            error: function() {
+                                toastr.error('Error checking invoice by number');
+                                if ($button) $button.prop('disabled', false).html(originalHtml);
+                            }
+                        });
+                    } else {
+                        toastr.error('Could not get invoice number');
                         if ($button) $button.prop('disabled', false).html(originalHtml);
                     }
-                });
-            }
+                },
+                error: function() {
+                    toastr.error('Error fetching email details');
+                    if ($button) $button.prop('disabled', false).html(originalHtml);
+                }
+            });
+        }
 
+        function regenerateInvoice(button) {
+            const emailId = $(button).data('email-id');
+            const originalHtml = $(button).html();
+            const $button = $(button);
 
-            function regenerateInvoice(button) {
-                const emailId = $(button).data('email-id');
-                const originalHtml = $(button).html();
-                const $button = $(button);
+            $.ajax({
+                url: '{{ route('get.email.invoice.number') }}',
+                method: 'GET',
+                data: { email_id: emailId },
+                dataType: 'json',
+                success: function(emailResponse) {
+                    if (emailResponse.success) {
+                        const invoiceNumber = emailResponse.invoice_number;
 
-                // Get current revision count - use checkInvoice.by.number
-                $.ajax({
-                    url: '{{ route('get.email.invoice.number') }}',
-                    method: 'GET',
-                    data: {
-                        email_id: emailId
-                    },
-                    dataType: 'json',
-                    success: function(emailResponse) {
-                        if (emailResponse.success) {
-                            const invoiceNumber = emailResponse.invoice_number;
-
-                            $.ajax({
-                                url: '{{ route('check.invoice.by.number') }}',
-                                method: 'GET',
-                                data: {
-                                    invoice_number: invoiceNumber
-                                },
-                                dataType: 'json',
-                                success: function(response) {
-                                    if (response.exists) {
-                                        const nextRevision = response.revision_number + 1;
-                                        if (!confirm('⚠️ This will create a REVISED invoice (R' +
-                                                nextRevision + '). Continue?')) {
-                                            return;
-                                        }
-
-                                        $button.prop('disabled', true).html(
-                                            '<i class="fas fa-spinner fa-spin"></i> Creating Revision...'
-                                        );
-
-                                        $.ajax({
-                                            url: '{{ route('regenerate.invoice') }}',
-                                            method: 'POST',
-                                            data: {
-                                                email_id: emailId,
-                                                _token: '{{ csrf_token() }}'
-                                            },
-                                            dataType: 'json',
-                                            success: function(response) {
-                                                if (response.success) {
-                                                    window.open(
-                                                        '{{ url('/invoice/view') }}/' +
-                                                        response.invoice_id, '_blank');
-                                                    toastr.success(response.message ||
-                                                        '✅ Revision created successfully!'
-                                                    );
-                                                    setTimeout(() => location.reload(),
-                                                        2000);
-                                                } else {
-                                                    toastr.error(response.message ||
-                                                        'Failed to create revision');
-                                                    $button.prop('disabled', false).html(
-                                                        originalHtml);
-                                                }
-                                            },
-                                            error: function(xhr) {
-                                                let errorMsg = 'Error creating revision';
-                                                if (xhr.responseJSON && xhr.responseJSON
-                                                    .message) errorMsg = xhr.responseJSON
-                                                    .message;
-                                                toastr.error(errorMsg);
-                                                $button.prop('disabled', false).html(
-                                                    originalHtml);
-                                            }
-                                        });
-                                    } else {
-                                        toastr.error('No invoice found to revise');
+                        $.ajax({
+                            url: '{{ route('check.invoice.by.number') }}',
+                            method: 'GET',
+                            data: { invoice_number: invoiceNumber },
+                            dataType: 'json',
+                            success: function(response) {
+                                if (response.exists) {
+                                    const nextRevision = response.revision_number + 1;
+                                    if (!confirm('⚠️ This will create a REVISED invoice (R' + nextRevision + '). Continue?')) {
+                                        return;
                                     }
-                                },
-                                error: function() {
-                                    toastr.error('Failed to check invoice status');
-                                }
-                            });
-                        } else {
-                            toastr.error('Could not get invoice number');
-                        }
-                    },
-                    error: function() {
-                        toastr.error('Failed to fetch email details');
-                    }
-                });
-            }
 
-            function getNextRevisionNumber(emailId) {
-                // This is a helper - actual revision number is calculated on server
-                return '?';
-            }
-        </script>
-    @endpush
+                                    $button.prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Creating Revision...');
+
+                                    $.ajax({
+                                        url: '{{ route('regenerate.invoice') }}',
+                                        method: 'POST',
+                                        data: {
+                                            email_id: emailId,
+                                            _token: '{{ csrf_token() }}'
+                                        },
+                                        dataType: 'json',
+                                        success: function(response) {
+                                            if (response.success) {
+                                                window.open('{{ url('/invoice/view') }}/' + response.invoice_id, '_blank');
+                                                toastr.success(response.message || '✅ Revision created successfully!');
+                                                setTimeout(() => location.reload(), 2000);
+                                            } else {
+                                                toastr.error(response.message || 'Failed to create revision');
+                                                $button.prop('disabled', false).html(originalHtml);
+                                            }
+                                        },
+                                        error: function(xhr) {
+                                            let errorMsg = 'Error creating revision';
+                                            if (xhr.responseJSON && xhr.responseJSON.message) errorMsg = xhr.responseJSON.message;
+                                            toastr.error(errorMsg);
+                                            $button.prop('disabled', false).html(originalHtml);
+                                        }
+                                    });
+                                } else {
+                                    toastr.error('No invoice found to revise');
+                                }
+                            },
+                            error: function() {
+                                toastr.error('Failed to check invoice status');
+                            }
+                        });
+                    } else {
+                        toastr.error('Could not get invoice number');
+                    }
+                },
+                error: function() {
+                    toastr.error('Failed to fetch email details');
+                }
+            });
+        }
+
+        function getNextRevisionNumber(emailId) {
+            return '?';
+        }
+    });
+    // ====== SEARCH CLEAR BUTTON FUNCTIONALITY ======
+$(document).ready(function() {
+    const searchInput = $('#searchInput');
+    const clearBtn = $('#clearSearchBtn');
+    
+    // Show/hide clear button based on input value
+    function toggleClearButton() {
+        if (searchInput.val().length > 0) {
+            clearBtn.show();
+        } else {
+            clearBtn.hide();
+        }
+    }
+    
+    // Initial check
+    toggleClearButton();
+    
+    // Show/hide on input
+    searchInput.on('input', function() {
+        toggleClearButton();
+    });
+    
+    // Clear search and submit form
+    clearBtn.on('click', function() {
+        searchInput.val('');
+        toggleClearButton();
+        
+        // Auto-submit the filter form to clear search
+        $('#filterForm').submit();
+    });
+    
+    // Handle Enter key in search input
+    searchInput.on('keypress', function(e) {
+        if (e.which === 13) {
+            e.preventDefault();
+            $('#filterForm').submit();
+        }
+    });
+});
+</script>
+@endpush
 @endsection

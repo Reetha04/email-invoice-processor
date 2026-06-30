@@ -130,7 +130,7 @@
                             Showing {{ $invoices->firstItem() ?? 0 }} to {{ $invoices->lastItem() ?? 0 }} of {{ $invoices->total() }} invoices
                         </div>
                         <div>
-                            {{ $invoices->appends(request()->query())->links() }}
+                         {{ $invoices->appends(request()->query())->links('pagination::bootstrap-5', ['class' => 'pagination-sm']) }}
                         </div>
                     </div>
                     

@@ -2775,10 +2775,6 @@ private function extractMealItems($plainText)
     return $mealItems;
 }
 
-/**
- * Extract individual Other Rates items from email HTML
- * Handles HTML tables with headers: PAX, RATE, TOTAL
- */
 private function extractOtherRateItems($html, $plainText = '')
 {
     $otherRateItems = [];
@@ -2829,13 +2825,18 @@ private function extractOtherRateItems($html, $plainText = '')
             $paxIndex = -1;
             $rateIndex = -1;
             $totalIndex = -1;
+            $serviceNameIndex = 0;
+            
             foreach ($headers as $i => $h) {
-                if (strpos($h, 'PAX') !== false) $paxIndex = $i;
-                if (strpos($h, 'RATE') !== false) $rateIndex = $i;
-                if (strpos($h, 'TOTAL') !== false) $totalIndex = $i;
+                $upper = strtoupper(trim($h));
+                if (strpos($upper, 'PAX') !== false) $paxIndex = $i;
+                if (strpos($upper, 'RATE') !== false) $rateIndex = $i;
+                if (strpos($upper, 'TOTAL') !== false) $totalIndex = $i;
+                // Service name is usually the first column
+                if ($i == 0) $serviceNameIndex = $i;
             }
             
-            Log::info("📊 Column indices - PAX: {$paxIndex}, RATE: {$rateIndex}, TOTAL: {$totalIndex}");
+            Log::info("📊 Column indices - Service: {$serviceNameIndex}, PAX: {$paxIndex}, RATE: {$rateIndex}, TOTAL: {$totalIndex}");
             
             // Process data rows (skip header row)
             for ($i = 1; $i < $rows->length; $i++) {
@@ -2852,73 +2853,80 @@ private function extractOtherRateItems($html, $plainText = '')
                     continue;
                 }
                 
-                // ✅ Get service name from the first column (col0)
-                $serviceName = '';
-                $col0 = trim($cells[0] ?? '');
-                $col1 = trim($cells[1] ?? '');
-                
-                // Determine which column holds the service name
-                if (empty($col0) || strtoupper($col0) === 'TOTAL') {
-                    $serviceName = $col1;
-                } else {
-                    $serviceName = $col0;
-                }
+                // ✅ Get service name from first column
+                $serviceName = trim($cells[$serviceNameIndex] ?? '');
                 
                 // Skip if service name is empty or is a total row
                 if (empty($serviceName) || strtoupper($serviceName) === 'TOTAL') {
                     continue;
                 }
                 
-                // ✅ IMPROVED: Get PAX info from the PAX column
+                // ✅ Get PAX info - handle both numbers and dashes
                 $paxInfo = trim($cells[$paxIndex] ?? '');
                 $paxCount = 0;
                 $paxType = 'adult';
                 
-                // 🔍 Check for different PAX formats
-                // Format 1: "adult : 2"
-                if (preg_match('/adult\s*:\s*(\d+)/i', $paxInfo, $match)) {
+                // Check if PAX is a dash or empty - treat as 1 (single item)
+                if ($paxInfo === '-' || $paxInfo === '') {
+                    $paxCount = 1;
+                    $paxType = 'adult';
+                } 
+                // Check for different PAX formats
+                elseif (preg_match('/adult\s*:\s*(\d+)/i', $paxInfo, $match)) {
                     $paxCount = intval($match[1]);
                     $paxType = 'adult';
                 } 
-                // Format 2: "cwb : 1" (child with bed)
                 elseif (preg_match('/cwb\s*:\s*(\d+)/i', $paxInfo, $match)) {
                     $paxCount = intval($match[1]);
                     $paxType = 'cwb';
                 }
-                // Format 3: "cnb : 1" (child no bed)
                 elseif (preg_match('/cnb\s*:\s*(\d+)/i', $paxInfo, $match)) {
                     $paxCount = intval($match[1]);
                     $paxType = 'cnb';
                 }
-                // Format 4: "child : 1"
                 elseif (preg_match('/child\s*:\s*(\d+)/i', $paxInfo, $match)) {
                     $paxCount = intval($match[1]);
                     $paxType = 'child';
                 }
-                // Format 5: Just a number (assume adult)
+                // If it's just a number
                 elseif (preg_match('/\b(\d+)\b/', $paxInfo, $match) && floatval($match[1]) > 0) {
                     $paxCount = intval($match[1]);
                     $paxType = 'adult';
                 }
                 
-                // ✅ Skip if pax count is 0 (both adult and child)
-                if ($paxCount == 0) {
-                    Log::info("⏭️ Skipping row with 0 pax: {$serviceName} - {$paxInfo}");
-                    continue;
+                // ✅ Get rate - handle dashes
+                $rateValue = trim($cells[$rateIndex] ?? '');
+                $rate = 0;
+                if ($rateValue !== '-' && $rateValue !== '') {
+                    $rate = floatval(preg_replace('/[^0-9.]/', '', $rateValue));
                 }
                 
-                // ✅ Get rate
-                $rateValue = trim($cells[$rateIndex] ?? '');
-                $rate = floatval(preg_replace('/[^0-9.]/', '', $rateValue));
-                
-                // ✅ Get total amount
+                // ✅ Get total amount - THIS IS THE KEY
                 $totalValue = trim($cells[$totalIndex] ?? '');
-                $amount = floatval(preg_replace('/[^0-9.]/', '', $totalValue));
+                $amount = 0;
+                if ($totalValue !== '-' && $totalValue !== '') {
+                    $amount = floatval(preg_replace('/[^0-9.]/', '', $totalValue));
+                }
                 
                 // ✅ If amount is 0 but rate and pax exist, calculate
                 if ($amount == 0 && $rate > 0 && $paxCount > 0) {
                     $amount = $rate * $paxCount;
                     Log::info("📊 Calculated amount: {$rate} × {$paxCount} = {$amount}");
+                }
+                
+                // ✅ If amount is 0, try to find any number in the row
+                if ($amount == 0) {
+                    foreach ($cells as $cell) {
+                        $cell = trim($cell);
+                        if ($cell !== '-' && $cell !== '' && is_numeric(str_replace(',', '', $cell))) {
+                            $num = floatval(str_replace(',', '', $cell));
+                            if ($num > 0) {
+                                $amount = $num;
+                                Log::info("📊 Found amount from cell: {$amount}");
+                                break;
+                            }
+                        }
+                    }
                 }
                 
                 // ✅ Skip if amount <= 0
@@ -2947,20 +2955,20 @@ private function extractOtherRateItems($html, $plainText = '')
                 
                 // ✅ Build remarks WITHOUT service name (only pax details)
                 if ($paxType == 'adult') {
-                    $remarks = "Adult: {$paxCount} × {$rate} = {$amount}";
+                    $remarks = "Adult: {$paxCount} × " . number_format($rate, 2) . " = " . number_format($amount, 2);
                 } elseif ($paxType == 'cwb') {
-                    $remarks = "CWB: {$paxCount} × {$rate} = {$amount}";
+                    $remarks = "CWB: {$paxCount} × " . number_format($rate, 2) . " = " . number_format($amount, 2);
                 } elseif ($paxType == 'cnb') {
-                    $remarks = "CNB: {$paxCount} × {$rate} = {$amount}";
+                    $remarks = "CNB: {$paxCount} × " . number_format($rate, 2) . " = " . number_format($amount, 2);
                 } else {
-                    $remarks = "{$paxType}: {$paxCount} × {$rate} = {$amount}";
+                    $remarks = "Total: " . number_format($amount, 2);
                 }
                 
                 $otherRateItems[] = [
-                    'service_name' => $serviceName,  // ✅ Service name in description
+                    'service_name' => $serviceName,
                     'amount' => $amount,
                     'details' => [
-                        'remarks' => $remarks,  // ✅ Only pax details
+                        'remarks' => $remarks,
                         'pax' => $paxCount,
                         'rate' => $rate,
                         'pax_type' => $paxType,
@@ -2981,7 +2989,7 @@ private function extractOtherRateItems($html, $plainText = '')
         Log::error($e->getTraceAsString());
     }
     
-    // If no items found via HTML, fallback to plain text parsing
+    // If no items found via HTML, try plain text fallback
     if (empty($otherRateItems) && !empty($plainText)) {
         Log::info("No Other Rate items from HTML, trying plain text fallback");
         return $this->extractOtherRateItemsFromPlainText($plainText);
@@ -2990,97 +2998,85 @@ private function extractOtherRateItems($html, $plainText = '')
     Log::info("📊 Total Other Rate items extracted: " . count($otherRateItems));
     return $otherRateItems;
 }
-/**
- * Fallback: Extract Other Rates from plain text (pipe format)
- */
 private function extractOtherRateItemsFromPlainText($plainText)
 {
     $otherRateItems = [];
     
-    // ✅ Pattern for bold service names with PAX, RATE, TOTAL
-    $pattern = '/\|\s*\*\*([^*]+?)\*\*\s*\|\s*(?:adult|cnb)\s*:\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d,]+\.\d+)\s*\|/i';
-    if (preg_match_all($pattern, $plainText, $matches, PREG_SET_ORDER)) {
-        foreach ($matches as $match) {
-            $serviceName = trim($match[1]);
-            $paxCount = intval($match[2]);
-            $rate = floatval($match[3]);
-            $amount = floatval(str_replace(',', '', $match[4]));
+    // Find Other Rates section
+    if (preg_match('/Other Rates(.*?)(?:Attraction|Tour Transfers|Meals|Transport|$)/is', $plainText, $sectionMatch)) {
+        $section = $sectionMatch[1];
+        Log::info("Other Rates section found in plain text");
+        
+        // Split into lines
+        $lines = explode("\n", $section);
+        
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
             
-            if ($amount <= 0 || empty($serviceName)) continue;
+            // Skip header
+            if (preg_match('/PAX|RATE|TOTAL/i', $line)) continue;
             
-            // Determine pax type from the match
-            $paxType = stripos($match[0], 'cnb') !== false ? 'cnb' : 'adult';
-            
-            // Skip child rows with 0 pax
-            if ($paxType === 'cnb' && $paxCount == 0) continue;
-            
-            // ✅ FIX: Create unique key for adult/child combinations
-            $uniqueKey = $serviceName . '_' . $paxType . '_' . $paxCount;
-            
-            // Avoid duplicates using unique key
-            $exists = false;
-            foreach ($otherRateItems as $item) {
-                $itemKey = $item['service_name'] . '_' . ($item['details']['pax_type'] ?? 'adult') . '_' . ($item['details']['pax'] ?? 0);
-                if ($itemKey === $uniqueKey) {
-                    $exists = true;
-                    break;
+            // Try to extract using pipe format or spaces
+            if (strpos($line, '|') !== false) {
+                $parts = explode('|', $line);
+                $cleanParts = array_map('trim', $parts);
+                $cleanParts = array_filter($cleanParts, function($p) { return $p !== ''; });
+                $cleanParts = array_values($cleanParts);
+                
+                if (count($cleanParts) < 3) continue;
+                
+                // Check if this is a total row
+                if (strtolower($cleanParts[0]) === 'total') continue;
+                
+                $serviceName = $cleanParts[0];
+                $paxInfo = $cleanParts[1] ?? '';
+                $rate = floatval(preg_replace('/[^0-9.]/', '', $cleanParts[2] ?? '0'));
+                $amount = 0;
+                
+                // Try to get amount from the last column
+                if (isset($cleanParts[3])) {
+                    $amount = floatval(preg_replace('/[^0-9.]/', '', $cleanParts[3]));
                 }
-            }
-            if ($exists) continue;
-            
-            $otherRateItems[] = [
-                'service_name' => $serviceName,
-                'amount' => $amount,
-                'details' => [
-                    'remarks' => $serviceName,
-                    'pax' => $paxCount,
-                    'rate' => $rate,
-                    'pax_type' => $paxType,
-                ]
-            ];
-        }
-        if (!empty($otherRateItems)) return $otherRateItems;
-    }
-    
-    // Fallback: without bold
-    $fallbackPattern = '/\|\s*([^|]+?)\s*\|\s*(?:adult|cnb)\s*:\s*(\d+)\s*\|\s*([\d.]+)\s*\|\s*([\d,]+\.\d+)\s*\|/i';
-    if (preg_match_all($fallbackPattern, $plainText, $matches, PREG_SET_ORDER)) {
-        foreach ($matches as $match) {
-            $serviceName = trim($match[1]);
-            if (in_array(strtoupper($serviceName), ['PAX', 'RATE', 'TOTAL', ''])) continue;
-            
-            $paxCount = intval($match[2]);
-            $rate = floatval($match[3]);
-            $amount = floatval(str_replace(',', '', $match[4]));
-            
-            if ($amount <= 0 || empty($serviceName)) continue;
-            
-            $paxType = stripos($match[0], 'cnb') !== false ? 'cnb' : 'adult';
-            if ($paxType === 'cnb' && $paxCount == 0) continue;
-            
-            // ✅ FIX: Unique key for adult/child
-            $uniqueKey = $serviceName . '_' . $paxType . '_' . $paxCount;
-            
-            $exists = false;
-            foreach ($otherRateItems as $item) {
-                $itemKey = $item['service_name'] . '_' . ($item['details']['pax_type'] ?? 'adult') . '_' . ($item['details']['pax'] ?? 0);
-                if ($itemKey === $uniqueKey) {
-                    $exists = true;
-                    break;
+                
+                // If no amount found, try to find any number in the row
+                if ($amount == 0) {
+                    foreach ($cleanParts as $part) {
+                        $num = floatval(preg_replace('/[^0-9.]/', '', $part));
+                        if ($num > 0 && $num != $rate) {
+                            $amount = $num;
+                            break;
+                        }
+                    }
                 }
+                
+                if ($amount <= 0) continue;
+                
+                // Determine pax type and count
+                $paxCount = 1;
+                $paxType = 'adult';
+                if (preg_match('/adult\s*:\s*(\d+)/i', $paxInfo, $match)) {
+                    $paxCount = intval($match[1]);
+                } elseif (preg_match('/cnb\s*:\s*(\d+)/i', $paxInfo, $match)) {
+                    $paxCount = intval($match[1]);
+                    $paxType = 'cnb';
+                } elseif (is_numeric($paxInfo) && floatval($paxInfo) > 0) {
+                    $paxCount = intval($paxInfo);
+                }
+                
+                $otherRateItems[] = [
+                    'service_name' => $serviceName,
+                    'amount' => $amount,
+                    'details' => [
+                        'remarks' => $serviceName,
+                        'pax' => $paxCount,
+                        'rate' => $rate,
+                        'pax_type' => $paxType,
+                    ]
+                ];
+                
+                Log::info("✅ Other Rate from plain text: {$serviceName} - \${$amount} (Pax: {$paxCount})");
             }
-            if ($exists) continue;
-            
-            $otherRateItems[] = [
-                'service_name' => $serviceName,
-                'amount' => $amount,
-                'details' => [
-                    'remarks' => $serviceName,
-                    'pax' => $paxCount,
-                    'rate' => $rate,
-                    'pax_type' => $paxType,
-                ]
-            ];
         }
     }
     
