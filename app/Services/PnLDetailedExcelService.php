@@ -294,57 +294,84 @@ if ($productItems->isNotEmpty()) {
             }
             
             // ========== SECTION 5: TRANSPORT ==========
-            $transportItems = $record->items->where('type', 'TRANSPORT');
-            
-            if ($transportItems->isNotEmpty()) {
-                $sheet->setCellValue("A{$row}", 'TRANSPORT');
-                $sheet->mergeCells("A{$row}:H{$row}");
-                $sheet->getStyle("A{$row}:H{$row}")->applyFromArray([
-                    'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => 'FFFFFF']],
-                    'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'DC3545']],
-                ]);
-                $row++;
-                
-                // Transport Headers
-                $transportHeaders = ['Description', 'Unit', 'Count', 'Rate', 'Total', '', '', ''];
-                $col = 'A';
-                foreach ($transportHeaders as $header) {
-                    $sheet->setCellValue($col . $row, $header);
-                    $sheet->getStyle($col . $row)->applyFromArray([
-                        'font' => ['bold' => true],
-                        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'E8EDF2']],
-                    ]);
-                    $col++;
-                }
-                $row++;
-                
-                foreach ($transportItems as $item) {
-                    $itemDetails = json_decode($item->item_details, true);
-                    $unit = $itemDetails['unit_type'] ?? 'Days';
-                    $count = $itemDetails['distance_days'] ?? 1;
-                    $rate = floatval($itemDetails['rate'] ?? 0);
-                    $amount = floatval($item->amount_original);
-                    
-                    $sheet->setCellValue("A{$row}", $item->service_name);
-                    $sheet->setCellValue("B{$row}", $unit);
-                    $sheet->setCellValue("C{$row}", $count);
-                    $sheet->setCellValue("D{$row}", $this->safeNumberFormat($rate, 2));
-                    $sheet->setCellValue("E{$row}", $this->safeNumberFormat(abs($amount), 2));
-                    
-                    $sheet->getStyle("D{$row}:E{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
-                    $row++;
-                }
-                
-                // Transport Grand Total
-                $transportTotal = $transportItems->sum(function($item) {
-                    return abs(floatval($item->amount_original));
-                });
-                $sheet->setCellValue("D{$row}", 'Grand Total');
-                $sheet->setCellValue("E{$row}", $this->safeNumberFormat($transportTotal, 2));
-                $sheet->getStyle("D{$row}:E{$row}")->applyFromArray(['font' => ['bold' => true]]);
-                $sheet->getStyle("E{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
-                $row += 2;
+$transportItems = $record->items->where('type', 'TRANSPORT');
+
+if ($transportItems->isNotEmpty()) {
+    $sheet->setCellValue("A{$row}", 'TRANSPORT');
+    $sheet->mergeCells("A{$row}:H{$row}");
+    $sheet->getStyle("A{$row}:H{$row}")->applyFromArray([
+        'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => 'FFFFFF']],
+        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'DC3545']],
+    ]);
+    $row++;
+    
+    // Transport Headers
+    $transportHeaders = ['Description', 'Unit', 'Count', 'Rate', 'Total', '', '', ''];
+    $col = 'A';
+    foreach ($transportHeaders as $header) {
+        $sheet->setCellValue($col . $row, $header);
+        $sheet->getStyle($col . $row)->applyFromArray([
+            'font' => ['bold' => true],
+            'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'E8EDF2']],
+        ]);
+        $col++;
+    }
+    $row++;
+    
+    // ✅ Define custom sort order for Transport items
+    $transportOrder = [
+        'Travel' => 1,
+        'Bata' => 2,
+        'Paging' => 3,
+        'Highway Charges' => 4,
+        'Driver Accomodation' => 5,
+        'Driver Accommodation' => 5,
+        'Guide Fee' => 6,
+        'Water Bottles' => 7,
+        'Other Cost' => 8,
+    ];
+    
+    // Sort transport items by custom order
+    $sortedTransportItems = $transportItems->sortBy(function($item) use ($transportOrder) {
+        $serviceName = $item->service_name;
+        foreach ($transportOrder as $key => $order) {
+            if (stripos($serviceName, $key) !== false) {
+                return $order;
             }
+        }
+        return 999; // Unknown items go to the end
+    });
+    
+    foreach ($sortedTransportItems as $item) {
+        $itemDetails = json_decode($item->item_details, true);
+        $unit = $itemDetails['unit_type'] ?? 'Days';
+        $count = $itemDetails['distance_days'] ?? 1;
+        $rate = floatval($itemDetails['rate'] ?? 0);
+        $amount = floatval($item->amount_original);
+        
+        // ✅ Don't round the rate - keep as is
+        $sheet->setCellValue("A{$row}", $item->service_name);
+        $sheet->setCellValue("B{$row}", $unit);
+        $sheet->setCellValue("C{$row}", $count);
+        // ✅ Use number_format with 4 decimal places for rates, 2 for totals
+        $sheet->setCellValue("D{$row}", number_format($rate, 4));
+        $sheet->setCellValue("E{$row}", $this->safeNumberFormat(abs($amount), 2));
+        
+        // Format as currency only for Total column
+        $sheet->getStyle("E{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
+        $row++;
+    }
+    
+    // Transport Grand Total
+    $transportTotal = $transportItems->sum(function($item) {
+        return abs(floatval($item->amount_original));
+    });
+    $sheet->setCellValue("D{$row}", 'Grand Total');
+    $sheet->setCellValue("E{$row}", $this->safeNumberFormat($transportTotal, 2));
+    $sheet->getStyle("D{$row}:E{$row}")->applyFromArray(['font' => ['bold' => true]]);
+    $sheet->getStyle("E{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
+    $row += 2;
+}
             
             // ========== SECTION 6: MEALS ==========
             $mealItems = $record->items->where('type', 'MEALS');
@@ -615,58 +642,54 @@ if ($productItems->isNotEmpty()) {
                 $html .= '</tbody></table>';
             }
             
-            // ========== TRANSPORT ==========
-            $transportItems = $record->items->where('type', 'TRANSPORT');
-            if ($transportItems->isNotEmpty()) {
-                $html .= '<h4 class="mt-4" style="background:#DC3545;color:#fff;padding:8px;">TRANSPORT</h4>';
-                $html .= '<table class="table table-bordered table-striped table-sm">';
-                $html .= '<thead><tr><th>Description</th><th>Unit</th><th>Count</th><th>Rate</th><th>Total</th></tr></thead><tbody>';
-                foreach ($transportItems as $item) {
-                    $itemDetails = json_decode($item->item_details, true);
-                    $unit = $itemDetails['unit_type'] ?? 'Days';
-                    $count = $itemDetails['distance_days'] ?? 1;
-                    $rate = floatval($itemDetails['rate'] ?? 0);
-                    $amount = floatval($item->amount_original);
-                    $html .= '<tr>';
-                    $html .= '<td>' . ($item->service_name ?? '-') . '</td>';
-                    $html .= '<td>' . $unit . '</td>';
-                    $html .= '<td>' . $count . '</td>';
-                    $html .= '<td>' . $this->formatCurrency($rate, 'USD') . '</td>';
-                    $html .= '<td>' . $this->formatCurrency(abs($amount), 'USD') . '</td>';
-                    $html .= '</tr>';
-                }
-                $transportTotal = $transportItems->sum(fn($item) => abs(floatval($item->amount_original)));
-                $html .= '<tr class="fw-bold"><td colspan="4">Grand Total</td><td>' . $this->formatCurrency($transportTotal, 'USD') . '</td></tr>';
-                $html .= '</tbody></table>';
+// ========== TRANSPORT ==========
+$transportItems = $record->items->where('type', 'TRANSPORT');
+if ($transportItems->isNotEmpty()) {
+    $html .= '<h4 class="mt-4" style="background:#DC3545;color:#fff;padding:8px;">TRANSPORT</h4>';
+    $html .= '<table class="table table-bordered table-striped table-sm">';
+    $html .= '<thead><tr><th>Description</th><th>Unit</th><th>Count</th><th>Rate</th><th>Total</th></tr></thead><tbody>';
+    
+    // ✅ Use the same sort order
+    $transportOrder = [
+        'Travel' => 1,
+        'Bata' => 2,
+        'Paging' => 3,
+        'Highway Charges' => 4,
+        'Driver Accomodation' => 5,
+        'Driver Accommodation' => 5,
+        'Guide Fee' => 6,
+        'Water Bottles' => 7,
+        'Other Cost' => 8,
+    ];
+    
+    $sortedTransportItems = $transportItems->sortBy(function($item) use ($transportOrder) {
+        $serviceName = $item->service_name;
+        foreach ($transportOrder as $key => $order) {
+            if (stripos($serviceName, $key) !== false) {
+                return $order;
             }
-            
-            // ========== MEALS ==========
-            $mealItems = $record->items->where('type', 'MEALS');
-            if ($mealItems->isNotEmpty()) {
-                $html .= '<h4 class="mt-4" style="background:#FFC107;color:#000;padding:8px;">MEALS</h4>';
-                $html .= '<table class="table table-bordered table-striped table-sm">';
-                $html .= '<thead><tr><th>Meals</th><th>Type</th><th>Adult Count</th><th>Adult Rate</th><th>Child Count</th><th>Child Rate</th><th>Total</th></tr></thead><tbody>';
-                $pax = $record->total_pax ?? 0;
-                foreach ($mealItems as $item) {
-                    $itemDetails = json_decode($item->item_details, true);
-                    $adultRate = floatval($itemDetails['adult_rate'] ?? 0);
-                    $childRate = floatval($itemDetails['child_rate'] ?? 0);
-                    $amount = floatval($item->amount_original);
-                    $html .= '<tr>';
-                    $html .= '<td>' . ($item->service_name ?? '-') . '</td>';
-                    $html .= '<td>Dinner</td>';
-                    $html .= '<td>' . $pax . '</td>';
-                    $html .= '<td>' . $this->formatCurrency($adultRate, 'USD') . '</td>';
-                    $html .= '<td>0</td>';
-                    $html .= '<td>' . $this->formatCurrency($childRate, 'USD') . '</td>';
-                    $html .= '<td>' . $this->formatCurrency(abs($amount), 'USD') . '</td>';
-                    $html .= '</tr>';
-                }
-                $mealTotal = $mealItems->sum(fn($item) => abs(floatval($item->amount_original)));
-                $html .= '<tr class="fw-bold"><td colspan="6">Grand Total</td><td>' . $this->formatCurrency($mealTotal, 'USD') . '</td></tr>';
-                $html .= '</tbody></table>';
-            }
-            
+        }
+        return 999;
+    });
+    
+    foreach ($sortedTransportItems as $item) {
+        $itemDetails = json_decode($item->item_details, true);
+        $unit = $itemDetails['unit_type'] ?? 'Days';
+        $count = $itemDetails['distance_days'] ?? 1;
+        $rate = floatval($itemDetails['rate'] ?? 0);
+        $amount = floatval($item->amount_original);
+        $html .= '<tr>';
+        $html .= '<td>' . ($item->service_name ?? '-') . '</td>';
+        $html .= '<td>' . $unit . '</td>';
+        $html .= '<td>' . $count . '</td>';
+        $html .= '<td>' . number_format($rate, 4) . '</td>';  // ✅ 4 decimal places
+        $html .= '<td>' . $this->formatCurrency(abs($amount), 'USD') . '</td>';
+        $html .= '</tr>';
+    }
+    $transportTotal = $transportItems->sum(fn($item) => abs(floatval($item->amount_original)));
+    $html .= '<tr class="fw-bold"><td colspan="4">Grand Total</td><td>' . $this->formatCurrency($transportTotal, 'USD') . '</td></tr>';
+    $html .= '</tbody></table>';
+}
             // ========== SUMMARY ==========
             $invoiceTotal = floatval($record->amount ?? 0);
             $totalCost = $record->items->where('type', '!=', 'INVOICE')->sum(fn($item) => abs(floatval($item->amount_original)));
