@@ -2679,7 +2679,7 @@ private function extractTourTransferItemsFromHTML($html, $totalPax, $adultCount 
                 }
                 Log::info("📊 Adult Entrance (Rate): {$adultEntrance}, Child Entrance (Rate): {$childEntrance} for {$serviceName}");
                 
-                // ✅ Get adult and child rates from RATE column (these are the per-person costs)
+                // ✅ Get adult and child rates from RATE column
                 $adultRate = 0;
                 $childRate = 0;
                 
@@ -2704,10 +2704,7 @@ private function extractTourTransferItemsFromHTML($html, $totalPax, $adultCount 
                 
                 Log::info("📊 Final Adult Rate: {$adultRate}, Child Rate: {$childRate}, Total PAX: {$totalPax} for {$serviceName}");
                 
-                // ✅ ========== CRITICAL FIX: Two separate rows ==========
-                
-                // ROW 1: ENTRANCE (only if adult_entrance > 0 OR child_entrance > 0)
-                // Adult Entrance = RATE, Adult Count = from email header
+                // ✅ ========== ROW 1: ENTRANCE ==========
                 $entranceAmount = 0;
                 $entranceRemarks = "";
                 
@@ -2720,15 +2717,14 @@ private function extractTourTransferItemsFromHTML($html, $totalPax, $adultCount 
                     $entranceRemarks .= "Child: {$childCount} × " . number_format($childEntrance, 2) . " = " . number_format($childEntrance * $childCount, 2);
                 }
                 
-                // ✅ If entrance amount exists, add as separate row
                 if ($entranceAmount > 0) {
                     $transferItems[] = [
                         'service_name' => $serviceName,
                         'amount' => $entranceAmount,
                         'details' => [
                             'remarks' => $entranceRemarks,
-                            'adult_rate' => $adultEntrance,  // Note: This is the ENTRANCE RATE
-                            'child_rate' => $childEntrance,  // Note: This is the ENTRANCE RATE
+                            'adult_rate' => $adultEntrance,
+                            'child_rate' => $childEntrance,
                             'adult_entrance' => $adultEntrance,
                             'child_entrance' => $childEntrance,
                             'transfer_amount' => 0,
@@ -2744,8 +2740,7 @@ private function extractTourTransferItemsFromHTML($html, $totalPax, $adultCount 
                     Log::info("✅ Added ENTRANCE Row: {$serviceName} - {$entranceRemarks} - \${$entranceAmount}");
                 }
                 
-                // ROW 2: TRANSFER (PACKAGE COST for PVT)
-                // Transfer amount is the package cost
+                // ✅ ========== ROW 2: TRANSFER (PACKAGE) ==========
                 if ($transferAmount > 0) {
                     $transferItems[] = [
                         'service_name' => $serviceName,
@@ -2769,9 +2764,38 @@ private function extractTourTransferItemsFromHTML($html, $totalPax, $adultCount 
                     Log::info("✅ Added TRANSFER Row: {$serviceName} - Package: \${$transferAmount}");
                 }
                 
-                // ✅ If no entrance and no transfer, skip
-                if ($entranceAmount == 0 && $transferAmount == 0) {
-                    Log::info("⏭️ Skipping {$serviceName} - no entrance or transfer amount");
+                // ✅ ========== ROW 3: TRANSPORT (when no entrance/transfer but RATE exists) ==========
+                // This is the FIX for your Vietnam transfers!
+                if ($entranceAmount == 0 && $transferAmount == 0 && $adultRate > 0) {
+                    // Calculate amount: adultRate × adultCount
+                    $transportAmount = $adultRate * $totalPax;
+                    
+                    $transferItems[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $transportAmount,
+                        'details' => [
+                            'remarks' => "Rate: Adult " . number_format($adultRate, 2) . " × {$totalPax} pax = " . number_format($transportAmount, 2),
+                            'adult_rate' => $adultRate,
+                            'child_rate' => $childRate,
+                            'adult_entrance' => 0,
+                            'child_entrance' => 0,
+                            'transfer_amount' => 0,
+                            'pax' => $totalPax,
+                            'day' => $dayNumber,
+                            'calculation_type' => 'TRANSPORT_RATE',
+                            'is_entrance' => false,
+                            'is_transfer' => false,
+                            'is_transport' => true,
+                            'adult_count' => $totalPax,
+                            'child_count' => 0,
+                        ]
+                    ];
+                    Log::info("✅ Added TRANSPORT Row (from rate): {$serviceName} - \${$transportAmount} (Adult Rate: {$adultRate} × {$totalPax} pax)");
+                }
+                
+                // ✅ If nothing matched, log it
+                if ($entranceAmount == 0 && $transferAmount == 0 && $adultRate == 0) {
+                    Log::info("⏭️ Skipping {$serviceName} - no entrance, transfer, or rate");
                 }
             }
             
