@@ -258,7 +258,7 @@ public function exportToExcel(Request $request)
         if ($records->isEmpty()) {
             return redirect()->back()->with('error', 'No records found to export.');
         }
-
+ $records = $this->getLatestPnLRecords($records);
         $filename = "pnl_export_" . date('Y-m-d_His') . ".xlsx";
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
@@ -616,7 +616,7 @@ public function exportByCountry($country, Request $request)
         if ($records->isEmpty()) {
             return redirect()->back()->with('error', "No records found for country: {$country}");
         }
-        
+           $records = $this->getLatestPnLRecords($records);
         // Create filename with country
         $countryNames = [
             'SG' => 'Singapore',
@@ -839,12 +839,7 @@ if ($record->profit_loss !== null) {
         return redirect()->back()->with('error', 'Failed to export: ' . $e->getMessage());
     }
 }
-/**
- * Export ONLY approved/updated records by specific country
- */
-/**
- * Export ONLY approved/updated records by specific country
- */
+
 public function exportByCountryApproved($country, Request $request)
 {
     try {
@@ -867,7 +862,7 @@ public function exportByCountryApproved($country, Request $request)
         if ($records->isEmpty()) {
             return redirect()->back()->with('error', "No approved/updated records found for country: {$country}");
         }
-        
+          $records = $this->getLatestPnLRecords($records);
         // Create filename with country and "approved" suffix
         $countryNames = [
             'SG' => 'Singapore',
@@ -1158,7 +1153,7 @@ public function exportSelected(Request $request)
             }
             return response()->json(['success' => false, 'message' => 'No records found'], 404);
         }
-        
+         $records = $this->getLatestPnLRecords($records);
         // Create filename
         $filename = "pnl_selected_" . date('Y-m-d_His') . ".xlsx";
         
@@ -1542,4 +1537,73 @@ public function downloadDetailedPnL($id)
         return redirect()->back()->with('error', 'Failed to download: ' . $e->getMessage());
     }
 }
+ private function getLatestPnLRecords($records)
+    {
+        if ($records->isEmpty()) {
+            return $records;
+        }
+        
+        $grouped = [];
+        
+        foreach ($records as $record) {
+            // Extract base IS number (without revision suffix)
+            $baseIsNumber = $record->original_is_number ?? $record->is_number;
+            
+            // If it has revision format (e.g., VN40202_R2/R3), extract base
+            if (preg_match('/^([A-Z]{2}\d+)_R\d+\/R\d+$/', $record->is_number, $match)) {
+                $baseIsNumber = $match[1];
+            }
+            
+            $key = $baseIsNumber;
+            
+            // If this key doesn't exist in grouped array, add it
+            if (!isset($grouped[$key])) {
+                $grouped[$key] = $record;
+            } else {
+                // Compare which one is newer/latest
+                $existing = $grouped[$key];
+                
+                // Check if current record has a revision
+                $currentHasRevision = preg_match('/_R\d+\/R\d+$/', $record->is_number);
+                $existingHasRevision = preg_match('/_R\d+\/R\d+$/', $existing->is_number);
+                
+                // If current has revision and existing doesn't, current is newer
+                if ($currentHasRevision && !$existingHasRevision) {
+                    $grouped[$key] = $record;
+                }
+                // If both have revisions, compare version numbers
+                elseif ($currentHasRevision && $existingHasRevision) {
+                    preg_match('/_R(\d+)\/R(\d+)$/', $record->is_number, $currentMatch);
+                    preg_match('/_R(\d+)\/R(\d+)$/', $existing->is_number, $existingMatch);
+                    
+                    $currentRev = intval($currentMatch[1] ?? 0);
+                    $existingRev = intval($existingMatch[1] ?? 0);
+                    $currentVer = intval($currentMatch[2] ?? 0);
+                    $existingVer = intval($existingMatch[2] ?? 0);
+                    
+                    // Compare by version count first, then revision number
+                    if ($currentVer > $existingVer) {
+                        $grouped[$key] = $record;
+                    } elseif ($currentVer == $existingVer && $currentRev > $existingRev) {
+                        $grouped[$key] = $record;
+                    }
+                }
+                // If existing has revision and current doesn't, keep existing
+                elseif (!$currentHasRevision && $existingHasRevision) {
+                    // Keep existing (already set)
+                }
+                // If neither has revision, keep the newer date
+                else {
+                    $currentDate = $record->received_at ?? $record->created_at;
+                    $existingDate = $existing->received_at ?? $existing->created_at;
+                    
+                    if ($currentDate > $existingDate) {
+                        $grouped[$key] = $record;
+                    }
+                }
+            }
+        }
+        
+        return collect(array_values($grouped));
+    }
 }

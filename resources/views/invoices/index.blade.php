@@ -10,12 +10,16 @@
                         <span>Incoming Emails</span>
                     </div>
                     <div class="mt-2 mt-sm-0">
+                    
                         <form action="{{ route('process') }}" method="POST" style="display: inline;">
                             @csrf
                             <button type="submit" class="btn btn-sm btn-accent">
                                 <i class="fas fa-sync-alt me-1"></i> Fetch & Process
                             </button>
                         </form>
+                         <a href="{{ route('reports.index') }}" class="btn btn-info">
+                                <i class="fas fa-chart-bar me-1"></i> Reports
+                            </a>
                     </div>
                 </div>
             </div>
@@ -96,24 +100,7 @@
                     </div>
                 </div>
 
-                <!-- Quick Action Buttons -->
-                <!-- Quick Action Buttons -->
-                <div class="row mb-4">
-                    <div class="col-12">
-                        <div class="d-flex gap-2 flex-wrap">
-                            <a href="{{ route('credit') }}" class="btn btn-accent">
-                                <i class="fas fa-credit-card me-1"></i> Credit Invoices
-                            </a>
-                            <a href="{{ route('non-credit') }}" class="btn btn-outline-primary">
-                                <i class="fas fa-file-alt me-1"></i> Non-Credit Invoices
-                            </a>
-                            <!-- Reports Button -->
-                            <a href="{{ route('reports.index') }}" class="btn btn-info">
-                                <i class="fas fa-chart-bar me-1"></i> Reports
-                            </a>
-                        </div>
-                    </div>
-                </div>
+        
 
               <!-- Filter Section -->
 <div class="filter-section mb-4">
