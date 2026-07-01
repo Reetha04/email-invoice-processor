@@ -46,6 +46,15 @@ class PnLDetailedExcelService
     }
 
     /**
+     * Format currency with symbol
+     */
+    private function formatCurrency($amount, $currency)
+    {
+        $symbol = $currency === 'USD' ? '$' : $currency . ' ';
+        return $symbol . number_format($amount, 2);
+    }
+
+    /**
      * Generate Detailed P&L Excel for a record
      */
     public function generateDetailedPnL(PnlRecord $record)
@@ -151,13 +160,11 @@ class PnLDetailedExcelService
                 $row += 2;
             }
             
-            // ========== SECTION 3: PRODUCTS/ATTRACTIONS ==========
+            // ========== SECTION 3: ATTRACTIONS ==========
             $attractionItems = $record->items->where('type', 'ATTRACTION');
-            $tourTransferItems = $record->items->where('type', 'TOUR TRANSFER');
-            $productItems = $attractionItems->merge($tourTransferItems);
-
-            if ($productItems->isNotEmpty()) {
-                $sheet->setCellValue("A{$row}", 'PRODUCTS & ATTRACTIONS' . ($showLocalCurrency ? ' (' . $currencySymbol . ')' : ''));
+            
+            if ($attractionItems->isNotEmpty()) {
+                $sheet->setCellValue("A{$row}", 'ATTRACTIONS' . ($showLocalCurrency ? ' (' . $currencySymbol . ')' : ''));
                 $sheet->mergeCells("A{$row}:H{$row}");
                 $sheet->getStyle("A{$row}:H{$row}")->applyFromArray([
                     'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => 'FFFFFF']],
@@ -165,10 +172,10 @@ class PnLDetailedExcelService
                 ]);
                 $row++;
                 
-                // Product Headers
-                $productHeaders = ['Name of Product', 'Adult Count', 'Adult Rate', 'Child Count', 'Child Rate', 'No. of Package', 'Package Cost', 'Total' . ($showLocalCurrency ? ' (' . $currencySymbol . ')' : '')];
+                // Attraction Headers
+                $attractionHeaders = ['Name of Attraction', 'Adult Count', 'Adult Rate', 'Child Count', 'Child Rate', 'No. of Package', 'Package Cost', 'Total' . ($showLocalCurrency ? ' (' . $currencySymbol . ')' : '')];
                 $col = 'A';
-                foreach ($productHeaders as $header) {
+                foreach ($attractionHeaders as $header) {
                     $sheet->setCellValue($col . $row, $header);
                     $sheet->getStyle($col . $row)->applyFromArray([
                         'font' => ['bold' => true],
@@ -178,7 +185,66 @@ class PnLDetailedExcelService
                 }
                 $row++;
                 
-                foreach ($productItems as $item) {
+                foreach ($attractionItems as $item) {
+                    $itemDetails = json_decode($item->item_details, true);
+                    $adultCount = $itemDetails['adult_count'] ?? $record->adult_count ?? 0;
+                    $childCount = $itemDetails['child_count'] ?? $record->child_count ?? 0;
+                    $adultRate = floatval($itemDetails['adult_rate'] ?? 0);
+                    $childRate = floatval($itemDetails['child_rate'] ?? 0);
+                    $amount = floatval($item->amount_original);
+                    $displayAmount = $showLocalCurrency ? $amount * $exchangeRate : $amount;
+                    
+                    $sheet->setCellValue("A{$row}", $item->service_name);
+                    $sheet->setCellValue("B{$row}", $adultCount);
+                    $sheet->setCellValue("C{$row}", $this->safeNumberFormat($adultRate, 2));
+                    $sheet->setCellValue("D{$row}", $childCount);
+                    $sheet->setCellValue("E{$row}", $this->safeNumberFormat($childRate, 2));
+                    $sheet->setCellValue("F{$row}", 0);
+                    $sheet->setCellValue("G{$row}", 0);
+                    $sheet->setCellValue("H{$row}", $this->safeNumberFormat(abs($displayAmount), 2));
+                    
+                    $sheet->getStyle("C{$row}:H{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
+                    $row++;
+                }
+                
+                // Attraction Grand Total
+                $attractionTotal = $attractionItems->sum(function($item) use ($showLocalCurrency, $exchangeRate) {
+                    $amount = abs(floatval($item->amount_original));
+                    return $showLocalCurrency ? $amount * $exchangeRate : $amount;
+                });
+                $sheet->setCellValue("G{$row}", 'Grand Total');
+                $sheet->setCellValue("H{$row}", $this->safeNumberFormat($attractionTotal, 2));
+                $sheet->getStyle("G{$row}:H{$row}")->applyFromArray(['font' => ['bold' => true]]);
+                $sheet->getStyle("H{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
+                $row += 2;
+            }
+            
+            // ========== SECTION 4: TOUR TRANSFERS ==========
+            $tourTransferItems = $record->items->where('type', 'TOUR TRANSFER');
+            
+            if ($tourTransferItems->isNotEmpty()) {
+                $sheet->setCellValue("A{$row}", 'TOUR TRANSFERS' . ($showLocalCurrency ? ' (' . $currencySymbol . ')' : ''));
+                $sheet->mergeCells("A{$row}:H{$row}");
+                $sheet->getStyle("A{$row}:H{$row}")->applyFromArray([
+                    'font' => ['bold' => true, 'size' => 14, 'color' => ['rgb' => 'FFFFFF']],
+                    'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FF8C00']],
+                ]);
+                $row++;
+                
+                // Tour Transfer Headers
+                $tourTransferHeaders = ['Name of Transfer', 'Adult Count', 'Adult Rate', 'Child Count', 'Child Rate', 'No. of Package', 'Package Cost', 'Total' . ($showLocalCurrency ? ' (' . $currencySymbol . ')' : '')];
+                $col = 'A';
+                foreach ($tourTransferHeaders as $header) {
+                    $sheet->setCellValue($col . $row, $header);
+                    $sheet->getStyle($col . $row)->applyFromArray([
+                        'font' => ['bold' => true],
+                        'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => 'E8EDF2']],
+                    ]);
+                    $col++;
+                }
+                $row++;
+                
+                foreach ($tourTransferItems as $item) {
                     $itemDetails = json_decode($item->item_details, true);
                     $adultCount = $itemDetails['adult_count'] ?? $record->adult_count ?? 0;
                     $childCount = $itemDetails['child_count'] ?? $record->child_count ?? 0;
@@ -189,28 +255,7 @@ class PnLDetailedExcelService
                     $displayAmount = $showLocalCurrency ? $amount * $exchangeRate : $amount;
                     $pax = $itemDetails['pax'] ?? $record->total_pax ?? 0;
                     
-                    if ($item->type === 'TOUR TRANSFER') {
-                        if ($adultRate > 0 && $pax > 0) {
-                            $sheet->setCellValue("A{$row}", $item->service_name);
-                            $sheet->setCellValue("B{$row}", $adultCount);
-                            $sheet->setCellValue("C{$row}", $this->safeNumberFormat($adultRate, 2));
-                            $sheet->setCellValue("D{$row}", $childCount);
-                            $sheet->setCellValue("E{$row}", $this->safeNumberFormat($childRate, 2));
-                            $sheet->setCellValue("F{$row}", 0);
-                            $sheet->setCellValue("G{$row}", 0);
-                            $sheet->setCellValue("H{$row}", $this->safeNumberFormat(abs($displayAmount), 2));
-                        } else if ($transferAmount > 0) {
-                            $sheet->setCellValue("A{$row}", $item->service_name);
-                            $sheet->setCellValue("B{$row}", 0);
-                            $sheet->setCellValue("C{$row}", 0);
-                            $sheet->setCellValue("D{$row}", 0);
-                            $sheet->setCellValue("E{$row}", 0);
-                            $sheet->setCellValue("F{$row}", 1);
-                            $sheet->setCellValue("G{$row}", $this->safeNumberFormat($showLocalCurrency ? $transferAmount * $exchangeRate : $transferAmount, 2));
-                            $sheet->setCellValue("H{$row}", $this->safeNumberFormat($showLocalCurrency ? $transferAmount * $exchangeRate : $transferAmount, 2));
-                        }
-                    } 
-                    else if ($item->type === 'ATTRACTION') {
+                    if ($adultRate > 0 && $pax > 0) {
                         $sheet->setCellValue("A{$row}", $item->service_name);
                         $sheet->setCellValue("B{$row}", $adultCount);
                         $sheet->setCellValue("C{$row}", $this->safeNumberFormat($adultRate, 2));
@@ -219,25 +264,34 @@ class PnLDetailedExcelService
                         $sheet->setCellValue("F{$row}", 0);
                         $sheet->setCellValue("G{$row}", 0);
                         $sheet->setCellValue("H{$row}", $this->safeNumberFormat(abs($displayAmount), 2));
+                    } else if ($transferAmount > 0) {
+                        $sheet->setCellValue("A{$row}", $item->service_name);
+                        $sheet->setCellValue("B{$row}", 0);
+                        $sheet->setCellValue("C{$row}", 0);
+                        $sheet->setCellValue("D{$row}", 0);
+                        $sheet->setCellValue("E{$row}", 0);
+                        $sheet->setCellValue("F{$row}", 1);
+                        $sheet->setCellValue("G{$row}", $this->safeNumberFormat($showLocalCurrency ? $transferAmount * $exchangeRate : $transferAmount, 2));
+                        $sheet->setCellValue("H{$row}", $this->safeNumberFormat($showLocalCurrency ? $transferAmount * $exchangeRate : $transferAmount, 2));
                     }
                     
                     $sheet->getStyle("C{$row}:H{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
                     $row++;
                 }
                 
-                // Product Grand Total
-                $productTotal = $productItems->sum(function($item) use ($showLocalCurrency, $exchangeRate) {
+                // Tour Transfer Grand Total
+                $tourTransferTotal = $tourTransferItems->sum(function($item) use ($showLocalCurrency, $exchangeRate) {
                     $amount = abs(floatval($item->amount_original));
                     return $showLocalCurrency ? $amount * $exchangeRate : $amount;
                 });
                 $sheet->setCellValue("G{$row}", 'Grand Total');
-                $sheet->setCellValue("H{$row}", $this->safeNumberFormat($productTotal, 2));
+                $sheet->setCellValue("H{$row}", $this->safeNumberFormat($tourTransferTotal, 2));
                 $sheet->getStyle("G{$row}:H{$row}")->applyFromArray(['font' => ['bold' => true]]);
                 $sheet->getStyle("H{$row}")->getNumberFormat()->setFormatCode(NumberFormat::FORMAT_CURRENCY_USD);
                 $row += 2;
             }
             
-            // ========== SECTION 4: OTHER RATES ==========
+            // ========== SECTION 5: OTHER RATES ==========
             $otherRateItems = $record->items->where('type', 'OTHER RATES');
             
             if ($otherRateItems->isNotEmpty()) {
@@ -290,7 +344,7 @@ class PnLDetailedExcelService
                 $row += 2;
             }
             
-            // ========== SECTION 5: TRANSPORT ==========
+            // ========== SECTION 6: TRANSPORT ==========
             $transportItems = $record->items->where('type', 'TRANSPORT');
 
             if ($transportItems->isNotEmpty()) {
@@ -365,7 +419,7 @@ class PnLDetailedExcelService
                 $row += 2;
             }
             
-            // ========== SECTION 6: MEALS ==========
+            // ========== SECTION 7: MEALS ==========
             $mealItems = $record->items->where('type', 'MEALS');
             
             if ($mealItems->isNotEmpty()) {
@@ -420,7 +474,7 @@ class PnLDetailedExcelService
                 $row += 2;
             }
             
-            // ========== SECTION 7: SUMMARY ==========
+            // ========== SECTION 8: SUMMARY ==========
             $sheet->setCellValue("A{$row}", 'SUMMARY');
             $sheet->mergeCells("A{$row}:H{$row}");
             $sheet->getStyle("A{$row}:H{$row}")->applyFromArray([
@@ -554,14 +608,47 @@ class PnLDetailedExcelService
                 $html .= '</tbody></table>';
             }
             
-            // ========== PRODUCTS & ATTRACTIONS ==========
-            $productItems = $record->items->whereIn('type', ['ATTRACTION', 'TOUR TRANSFER']);
-            if ($productItems->isNotEmpty()) {
-                $html .= '<h4 class="mt-4" style="background:#28A745;color:#fff;padding:8px;">PRODUCTS & ATTRACTIONS</h4>';
+            // ========== ATTRACTIONS ==========
+            $attractionItems = $record->items->where('type', 'ATTRACTION');
+            if ($attractionItems->isNotEmpty()) {
+                $html .= '<h4 class="mt-4" style="background:#28A745;color:#fff;padding:8px;">ATTRACTIONS</h4>';
                 $html .= '<table class="table table-bordered table-striped table-sm">';
                 $html .= '<thead><tr><th>Name</th><th>Adult Count</th><th>Adult Rate</th><th>Child Count</th><th>Child Rate</th><th>Package</th><th>Package Cost</th><th>Total</th></tr></thead><tbody>';
                 
-                foreach ($productItems as $item) {
+                foreach ($attractionItems as $item) {
+                    $itemDetails = json_decode($item->item_details, true);
+                    $adultCount = $itemDetails['adult_count'] ?? $record->adult_count ?? 0;
+                    $childCount = $itemDetails['child_count'] ?? $record->child_count ?? 0;
+                    $adultRate = floatval($itemDetails['adult_rate'] ?? 0);
+                    $childRate = floatval($itemDetails['child_rate'] ?? 0);
+                    $amount = floatval($item->amount_original);
+                    $displayAmount = $showLocalCurrency ? $amount * $exchangeRate : $amount;
+                    
+                    $html .= '<tr>';
+                    $html .= '<td>' . ($item->service_name ?? '-') . '</td>';
+                    $html .= '<td>' . $adultCount . '</td>';
+                    $html .= '<td>' . $this->formatCurrency($adultRate, $displayCurrency) . '</td>';
+                    $html .= '<td>' . $childCount . '</td>';
+                    $html .= '<td>' . $this->formatCurrency($childRate, $displayCurrency) . '</td>';
+                    $html .= '<td>0</td>';
+                    $html .= '<td>0</td>';
+                    $html .= '<td>' . $this->formatCurrency(abs($displayAmount), $displayCurrency) . '</td>';
+                    $html .= '</tr>';
+                }
+                
+                $attractionTotal = $attractionItems->sum(fn($item) => abs(floatval($item->amount_original)) * ($showLocalCurrency ? $exchangeRate : 1));
+                $html .= '<tr class="fw-bold"><td colspan="7">Grand Total</td><td>' . $this->formatCurrency($attractionTotal, $displayCurrency) . '</td></tr>';
+                $html .= '</tbody></table>';
+            }
+            
+            // ========== TOUR TRANSFERS ==========
+            $tourTransferItems = $record->items->where('type', 'TOUR TRANSFER');
+            if ($tourTransferItems->isNotEmpty()) {
+                $html .= '<h4 class="mt-4" style="background:#FF8C00;color:#fff;padding:8px;">TOUR TRANSFERS</h4>';
+                $html .= '<table class="table table-bordered table-striped table-sm">';
+                $html .= '<thead><tr><th>Name</th><th>Adult Count</th><th>Adult Rate</th><th>Child Count</th><th>Child Rate</th><th>Package</th><th>Package Cost</th><th>Total</th></tr></thead><tbody>';
+                
+                foreach ($tourTransferItems as $item) {
                     $itemDetails = json_decode($item->item_details, true);
                     $adultCount = $itemDetails['adult_count'] ?? $record->adult_count ?? 0;
                     $childCount = $itemDetails['child_count'] ?? $record->child_count ?? 0;
@@ -575,22 +662,7 @@ class PnLDetailedExcelService
                     $html .= '<tr>';
                     $html .= '<td>' . ($item->service_name ?? '-') . '</td>';
                     
-                    if ($item->type === 'TOUR TRANSFER') {
-                        if ($adultRate > 0 && $pax > 0) {
-                            $html .= '<td>' . $adultCount . '</td>';
-                            $html .= '<td>' . $this->formatCurrency($adultRate, $displayCurrency) . '</td>';
-                            $html .= '<td>' . $childCount . '</td>';
-                            $html .= '<td>' . $this->formatCurrency($childRate, $displayCurrency) . '</td>';
-                            $html .= '<td>0</td>';
-                            $html .= '<td>0</td>';
-                            $html .= '<td>' . $this->formatCurrency(abs($displayAmount), $displayCurrency) . '</td>';
-                        } else if ($transferAmount > 0) {
-                            $html .= '<td>0</td><td>0</td><td>0</td><td>0</td><td>1</td>';
-                            $html .= '<td>' . $this->formatCurrency($showLocalCurrency ? $transferAmount * $exchangeRate : $transferAmount, $displayCurrency) . '</td>';
-                            $html .= '<td>' . $this->formatCurrency($showLocalCurrency ? $transferAmount * $exchangeRate : $transferAmount, $displayCurrency) . '</td>';
-                        }
-                    } 
-                    else if ($item->type === 'ATTRACTION') {
+                    if ($adultRate > 0 && $pax > 0) {
                         $html .= '<td>' . $adultCount . '</td>';
                         $html .= '<td>' . $this->formatCurrency($adultRate, $displayCurrency) . '</td>';
                         $html .= '<td>' . $childCount . '</td>';
@@ -598,13 +670,17 @@ class PnLDetailedExcelService
                         $html .= '<td>0</td>';
                         $html .= '<td>0</td>';
                         $html .= '<td>' . $this->formatCurrency(abs($displayAmount), $displayCurrency) . '</td>';
+                    } else if ($transferAmount > 0) {
+                        $html .= '<td>0</td><td>0</td><td>0</td><td>0</td><td>1</td>';
+                        $html .= '<td>' . $this->formatCurrency($showLocalCurrency ? $transferAmount * $exchangeRate : $transferAmount, $displayCurrency) . '</td>';
+                        $html .= '<td>' . $this->formatCurrency($showLocalCurrency ? $transferAmount * $exchangeRate : $transferAmount, $displayCurrency) . '</td>';
                     }
                     
                     $html .= '</tr>';
                 }
                 
-                $productTotal = $productItems->sum(fn($item) => abs(floatval($item->amount_original)) * ($showLocalCurrency ? $exchangeRate : 1));
-                $html .= '<tr class="fw-bold"><td colspan="7">Grand Total</td><td>' . $this->formatCurrency($productTotal, $displayCurrency) . '</td></tr>';
+                $tourTransferTotal = $tourTransferItems->sum(fn($item) => abs(floatval($item->amount_original)) * ($showLocalCurrency ? $exchangeRate : 1));
+                $html .= '<tr class="fw-bold"><td colspan="7">Grand Total</td><td>' . $this->formatCurrency($tourTransferTotal, $displayCurrency) . '</td></tr>';
                 $html .= '</tbody></table>';
             }
             
@@ -737,14 +813,5 @@ class PnLDetailedExcelService
             Log::error('Detailed preview error: ' . $e->getMessage());
             return '<div class="alert alert-danger">Error loading preview: ' . $e->getMessage() . '</div>';
         }
-    }
-
-    /**
-     * Format currency with symbol
-     */
-    private function formatCurrency($amount, $currency)
-    {
-        $symbol = $currency === 'USD' ? '$' : $currency . ' ';
-        return $symbol . number_format($amount, 2);
     }
 }
