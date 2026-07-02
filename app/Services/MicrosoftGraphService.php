@@ -1125,7 +1125,29 @@ public function debugSaveOne($messageId)
         }
         
         Log::info("FINAL EXTRACTED - Start: {$travelStart}, End: {$travelEnd}");
-        
+            if ($travelStart) {
+        try {
+            $year = (int)date('Y', strtotime($travelStart));
+            if ($year < 2020) {
+                Log::info("⚠️ Ignoring travel_start date {$travelStart} - before 2020 (likely DOB)");
+                $travelStart = null;
+            }
+        } catch (\Exception $e) {
+            Log::warning("Could not parse travel_start: {$travelStart}");
+        }
+    }
+    
+    if ($travelEnd) {
+        try {
+            $year = (int)date('Y', strtotime($travelEnd));
+            if ($year < 2020) {
+                Log::info("⚠️ Ignoring travel_end date {$travelEnd} - before 2020 (likely DOB)");
+                $travelEnd = null;
+            }
+        } catch (\Exception $e) {
+            Log::warning("Could not parse travel_end: {$travelEnd}");
+        }
+    }
         return ['start' => $travelStart, 'end' => $travelEnd];
     }
     
