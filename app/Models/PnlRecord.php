@@ -21,6 +21,7 @@ class PnlRecord extends Model
         'subject',
         'body',
         'body_html',
+        'body_hash',
         'received_at',
         'vendor_name',
         'invoice_number',

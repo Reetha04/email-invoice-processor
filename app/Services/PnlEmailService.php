@@ -55,35 +55,35 @@ class PnlEmailService
 public function fetchPnLEmails()
 {
     try {
-        // ✅ Increase execution time to 10 minutes
-        set_time_limit(600); // 10 minutes
-        
-        // ✅ Reconnect to database if connection is lost
+        set_time_limit(600);
         \Illuminate\Support\Facades\DB::reconnect();
         
-        // STEP 1: Get all existing message IDs from database
-        $existingIds = PnlRecord::pluck('message_id')->toArray();
-        Log::info("📊 Existing emails in DB: " . count($existingIds));
+        // ✅ Get existing subject+body_hash combinations
+        $existingEmails = PnlRecord::select('subject', 'body_hash')->get();
+        $existingSet = [];
+        foreach ($existingEmails as $email) {
+            $key = md5(trim($email->subject) . '|' . $email->body_hash);
+            $existingSet[$key] = true;
+        }
+        Log::info("📊 Existing emails in DB: " . count($existingEmails));
         
-        // STEP 2: Fetch ALL emails with pagination (NO LIMIT)
+        // Fetch emails from Graph API
         $allMessages = [];
         $nextLink = null;
         $pageCount = 0;
-        $maxPages = 20; // ✅ Limit to 20 pages to avoid timeout
+        $maxPages = 20;
         
         $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_PNL_USER') . '/messages';
         
-        Log::info("📧 Fetching emails with pagination (max 20 pages)...");
-        
         do {
-            $url = $nextLink ?? $baseUrl . '?' . http_build_query([
-                '$top' => 50,  // ✅ Reduced from 100 to 50
-                '$orderby' => 'receivedDateTime desc',
-                '$select' => 'id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
-            ]);
+          $url = $nextLink ?? $baseUrl . '?' . http_build_query([
+    '$top' => 50,
+    '$orderby' => 'receivedDateTime asc',  // ✅ OLDEST FIRST
+    '$select' => 'id,subject,body,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
+]);
             
             $response = Http::withToken($this->accessToken)
-                ->timeout(60) // ✅ Reduced from 120 to 60 seconds
+                ->timeout(60)
                 ->get($url);
             
             if (!$response->ok()) {
@@ -93,40 +93,35 @@ public function fetchPnLEmails()
             
             $data = $response->json();
             $messages = $data['value'] ?? [];
-            
-            if (empty($messages)) {
-                Log::info("No more messages to fetch");
-                break;
-            }
-            
             $allMessages = array_merge($allMessages, $messages);
             
             $nextLink = $data['@odata.nextLink'] ?? null;
             $pageCount++;
             
-            Log::info("📥 Page {$pageCount}: " . count($messages) . " emails (Total: " . count($allMessages) . ")");
+            Log::info("📥 Page {$pageCount}: " . count($messages) . " emails");
             
-            // ✅ Small delay between requests
-            if ($nextLink) {
-                usleep(100000); // 0.1 second delay
-            }
-            
-            // ✅ Stop if we've reached max pages
-            if ($pageCount >= $maxPages) {
-                Log::info("⚠️ Reached max pages ({$maxPages}), stopping");
-                break;
-            }
+            if ($nextLink) usleep(100000);
+            if ($pageCount >= $maxPages) break;
             
         } while ($nextLink);
         
-        Log::info("📬 Total emails fetched from API: " . count($allMessages));
+        Log::info("📬 Total emails fetched: " . count($allMessages));
         
-        // STEP 3: Filter to find NEW emails only
+        // ✅ Filter ONLY new emails using subject+body_hash
         $newMessages = [];
-        $existingIdSet = array_flip($existingIds);
         foreach ($allMessages as $message) {
-            if (!isset($existingIdSet[$message['id']])) {
+            $plainText = strip_tags($message['body']['content'] ?? $message['bodyPreview'] ?? '');
+            $normalizedBody = preg_replace('/\s+/', ' ', trim($plainText));
+            $bodyHash = md5($normalizedBody);
+            $subject = trim($message['subject'] ?? 'No Subject');
+            
+            $key = md5($subject . '|' . $bodyHash);
+            
+            if (!isset($existingSet[$key])) {
                 $newMessages[] = $message;
+                Log::info("🆕 New email found: {$subject} - Hash: {$bodyHash}");
+            } else {
+                Log::info("⏭️ SKIPPING duplicate: {$subject} (already exists)");
             }
         }
         
@@ -137,49 +132,45 @@ public function fetchPnLEmails()
             return 0;
         }
         
-        // STEP 4: Process ONLY new emails with smaller chunks
+        // Process new emails
         $sno = PnlRecord::max('sno') ?? 0;
         $newCount = 0;
-        $failedEmails = [];
         
-        // ✅ Process in smaller chunks (5 at a time)
-        $chunkSize = 5;
-        foreach (array_chunk($newMessages, $chunkSize) as $chunkIndex => $chunk) {
-            Log::info("📦 Processing chunk " . ($chunkIndex + 1) . " of " . ceil(count($newMessages) / $chunkSize));
-            
-            // ✅ Reconnect before each chunk to avoid timeout
+        foreach (array_chunk($newMessages, 5) as $chunk) {
             \Illuminate\Support\Facades\DB::reconnect();
             
-            foreach ($chunk as $message) {
-                $sno++;
-                Log::info("📝 Processing: " . ($message['subject'] ?? 'No Subject'));
-                
-                try {
-                    $fullMessage = $this->fetchFullMessage($message['id']);
-                    if ($fullMessage) {
-                        $saved = $this->savePnLEmail($fullMessage, $sno);
-                        if ($saved) {
-                            $newCount++;
-                            Log::info("✅ Saved: " . ($message['subject'] ?? 'No Subject'));
-                        } else {
-                            $failedEmails[] = $message['subject'] ?? 'Unknown';
-                            Log::error("❌ FAILED to save: " . ($message['subject'] ?? 'No Subject'));
-                        }
-                    }
-                } catch (\Exception $e) {
-                    $failedEmails[] = $message['subject'] ?? 'Unknown';
-                    Log::error("❌ EXCEPTION: " . $e->getMessage());
-                }
-            }
-            
-            // Small delay between chunks
-            if ($chunkIndex < count($newMessages) / $chunkSize - 1) {
-                usleep(200000); // 0.2 second delay
-            }
+         foreach ($chunk as $message) {
+    $sno++;
+
+    $fullMessage = $this->fetchFullMessage($message['id']);
+
+    if (!$fullMessage) {
+        continue;
+    }
+
+    $plainText = strip_tags($fullMessage['body']['content'] ?? $fullMessage['bodyPreview'] ?? '');
+    $normalizedBody = preg_replace('/\s+/', ' ', trim($plainText));
+    $bodyHash = md5($normalizedBody);
+    $subject = trim($fullMessage['subject'] ?? 'No Subject');
+
+    $exists = PnlRecord::where('subject', $subject)
+        ->where('body_hash', $bodyHash)
+        ->exists();
+
+    if ($exists) {
+        Log::info("⏭️ Duplicate found before save: {$subject}");
+        continue;   // ✅ This is valid because we're inside foreach
+    }
+
+    $saved = $this->savePnLEmail($fullMessage, $sno);
+
+    if ($saved) {
+        $newCount++;
+    }
+}
         }
         
-        Log::info("📊 SUMMARY: " . $newCount . " new emails saved, " . count($failedEmails) . " failed");
-        
+        Log::info("📊 SUMMARY: {$newCount} new emails saved");
         return $newCount;
         
     } catch (\Exception $e) {
@@ -215,6 +206,15 @@ protected function savePnLEmail($message, $sno)
         // ✅ GENERATE BODY HASH
         $normalizedBody = preg_replace('/\s+/', ' ', trim($plainText));
         $bodyHash = md5($normalizedBody);
+          $existing = PnlRecord::where('subject', $subject)
+            ->where('body_hash', $bodyHash)
+            ->first();
+             if ($existing) {
+            Log::info("⏭️ SKIPPING DUPLICATE: Subject: '{$subject}' already exists with same body");
+            Log::info("   Existing Record ID: {$existing->id}, IS Number: {$existing->is_number}");
+            return false;
+        }
+        
         Log::info("📝 Body Hash: {$bodyHash}");
         
         Log::info("Processing email: " . $subject);
