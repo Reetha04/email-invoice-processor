@@ -24,6 +24,6 @@ return Application::configure(basePath: dirname(__DIR__))
         ->everyFiveMinutes()
         ->withoutOverlapping()  // ✅ Prevents overlapping schedule runs
         ->appendOutputTo(storage_path('logs/pnl_fetch.log'));
-        $schedule->command('report:daily --upload')->dailyAt('23:59');
+        $schedule->command('report:daily --upload')->dailyAt('23:59')->timezone('Asia/Kolkata');;
     })
     ->create();

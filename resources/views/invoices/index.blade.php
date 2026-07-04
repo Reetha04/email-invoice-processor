@@ -232,7 +232,7 @@
                                             <span class="text-muted">-</span>
                                         @endif
                                     </td>
-                                    <td>{{ $email->agent_id ?: '-' }}</td>
+<td>{{ $email->reference_no ?: '-' }}</td>
                                     <td>{{ $email->sales_person ?: '-' }}</td>
                                     <td class="fw-semibold">
                                         @if ($email->total_amount)
@@ -289,25 +289,25 @@
                 </div>
 
                 <!-- Pagination -->
-                <div class="d-flex justify-content-between align-items-center mt-4 flex-wrap gap-3">
-                    <div>
-                        <label class="text-muted me-2 small">Show:</label>
-                        <select class="form-select form-select-sm d-inline-block w-auto"
-                            onchange="window.location.href=this.value">
-                            <option value="{{ route('index', array_merge(request()->query(), ['per_page' => 10])) }}"
-                                {{ request('per_page') == 10 ? 'selected' : '' }}>10</option>
-                            <option value="{{ route('index', array_merge(request()->query(), ['per_page' => 20])) }}"
-                                {{ request('per_page') == 20 ? 'selected' : '' }}>20</option>
-                            <option value="{{ route('index', array_merge(request()->query(), ['per_page' => 50])) }}"
-                                {{ request('per_page') == 50 ? 'selected' : '' }}>50</option>
-                            <option value="{{ route('index', array_merge(request()->query(), ['per_page' => 100])) }}"
-                                {{ request('per_page') == 100 ? 'selected' : '' }}>100</option>
-                        </select>
-                    </div>
-                    <div>
-                        {{ $emails->appends(request()->query())->links('pagination::bootstrap-5') }}
-                    </div>
-                </div>
+<div class="d-flex justify-content-between align-items-center mt-4 flex-wrap gap-3">
+    <div>
+        <label class="text-muted me-2 small">Show:</label>
+        <select class="form-select form-select-sm d-inline-block w-auto"
+            onchange="window.location.href=this.value">
+            <option value="{{ route('index', array_merge(request()->query(), ['per_page' => 10])) }}"
+                {{ request('per_page') == 10 ? 'selected' : '' }}>10</option>
+            <option value="{{ route('index', array_merge(request()->query(), ['per_page' => 20])) }}"
+                {{ request('per_page') == 20 ? 'selected' : '' }}>20</option>
+            <option value="{{ route('index', array_merge(request()->query(), ['per_page' => 50])) }}"
+                {{ request('per_page') == 50 ? 'selected' : '' }}>50</option>
+            <option value="{{ route('index', array_merge(request()->query(), ['per_page' => 100])) }}"
+                {{ request('per_page') == 100 ? 'selected' : '' }}>100</option>
+        </select>
+    </div>
+    <div>
+        {{ $emails->appends(request()->query())->links('pagination::bootstrap-5') }}
+    </div>
+</div>
             </div>
         </div>
     </div>

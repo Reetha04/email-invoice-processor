@@ -315,7 +315,7 @@
                     <th>Invoice #</th>
                     <th>Category</th>
                     <th>Amount</th>
-                    <th>Status</th>
+                    {{-- <th>Status</th> --}}
                     <th class="text-center">Actions</th>
                 </tr>
             </thead>
@@ -373,7 +373,7 @@
                         <td>
                             <span class="amount-value">${{ number_format($record->amount, 2) }}</span>
                         </td>
-                        <td>
+                        {{-- <td>
                             @if ($record->read_status == 'unread')
                                 <span class="status-badge status-unread">
                                     <i class="fas fa-circle me-1"></i> Unread
@@ -383,19 +383,27 @@
                                     <i class="fas fa-check-circle me-1"></i> Read
                                 </span>
                             @endif
-                        </td>
-                       <td>
-    <div class="action-buttons">
+                        </td> --}}
+<td>
+    <div class="action-group">
+        <!-- View P&L Sheet -->
         <a href="{{ route('pnl.view-excel', ['country' => $record->country_code ?? 'SG', 'id' => $record->id]) }}"
-            class="action-btn action-btn-view" target="_blank" title="View PnL Sheet">
+            class="action-link action-link-view" target="_blank" title="View PnL Sheet">
             <i class="fas fa-eye"></i>
+            <span>View</span>
         </a>
-       <a href="{{ route('pnl.view-detailed', $record->id) }}" 
-    class="btn btn-success btn-sm" 
-    onclick="event.stopPropagation();"
-    title="View Detailed P&L">
-    <i class="fas fa-file-invoice me-1"></i> Detailed P&L
-</a>
+        
+        <!-- Separator -->
+        <span class="action-divider"></span>
+        
+        <!-- Detailed P&L -->
+        <a href="{{ route('pnl.view-detailed', $record->id) }}" 
+            class="action-link action-link-detailed" 
+            onclick="event.stopPropagation();"
+            title="View Detailed Profit & Loss Statement">
+            <i class="fas fa-file-invoice"></i>
+            <span>P&L</span>
+        </a>
     </div>
 </td>
                     </tr>
@@ -1103,36 +1111,117 @@
             color: #10b981;
         }
 
-        /* Actions */
-        .action-buttons {
-            display: flex;
-            justify-content: center;
-            gap: 0.4rem;
-        }
+      /* ============================================
+   ACTION GROUP - View & P&L in one line
+   ============================================ */
+.action-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: #f8fafc;
+    padding: 0.15rem 0.4rem;
+    border-radius: 20px;
+    border: 1px solid #e8edf2;
+    transition: all 0.2s ease;
+}
 
-        .action-btn {
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            text-decoration: none;
-            transition: all 0.2s ease;
-            border: none;
-            cursor: pointer;
-        }
+.action-group:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+}
 
-        .action-btn-view {
-            background: #e0f2fe;
-            color: #0284c7;
-        }
+.action-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.25rem 0.6rem;
+    border-radius: 16px;
+    font-size: 0.65rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
 
-        .action-btn-view:hover {
-            background: #0ea5e9;
-            color: #fff;
-            transform: scale(1.05);
-        }
+.action-link i {
+    font-size: 0.7rem;
+}
+
+.action-link span {
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+
+/* View Button */
+.action-link-view {
+    color: #475569;
+}
+
+.action-link-view:hover {
+    color: #0284c7;
+    background: rgba(2, 132, 199, 0.08);
+    transform: translateY(-1px);
+}
+
+/* Detailed P&L Button */
+.action-link-detailed {
+    color: #475569;
+}
+
+.action-link-detailed:hover {
+    color: #0d9488;
+    background: rgba(13, 148, 136, 0.08);
+    transform: translateY(-1px);
+}
+
+/* Separator */
+.action-divider {
+    display: inline-block;
+    width: 1px;
+    height: 16px;
+    background: #e2e8f0;
+}
+
+/* For mobile responsive */
+@media (max-width: 768px) {
+    .action-group {
+        padding: 0.1rem 0.3rem;
+        gap: 0.15rem;
+    }
+    
+    .action-link {
+        padding: 0.2rem 0.4rem;
+        font-size: 0.55rem;
+    }
+    
+    .action-link i {
+        font-size: 0.6rem;
+    }
+    
+    .action-link span {
+        font-size: 0.5rem;
+    }
+    
+    .action-divider {
+        height: 14px;
+    }
+}
+
+/* For very small screens */
+@media (max-width: 480px) {
+    .action-link span {
+        display: none;
+    }
+    
+    .action-link {
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .action-link i {
+        font-size: 0.7rem;
+    }
+}
 
         /* ============================================
                    PAGINATION
@@ -1678,173 +1767,211 @@
 }
     </style>
 
-    @push('scripts')
-        <script>
-            $(document).ready(function() {
-                // ========== SELECT ALL ==========
-                $('#selectAllCheckbox').on('change', function() {
-                    const isChecked = $(this).prop('checked');
-                    $('.record-checkbox').prop('checked', isChecked);
-                    updateButtons();
-                });
+@push('scripts')
+<script>
+$(document).ready(function() {
+    // ========== SELECT ALL ==========
+    $('#selectAllCheckbox').on('change', function() {
+        const isChecked = $(this).prop('checked');
+        $('.record-checkbox').prop('checked', isChecked);
+        updateButtons();
+    });
 
-                // ========== INDIVIDUAL CHECKBOX ==========
-                $(document).on('change', '.record-checkbox', function() {
-                    updateButtons();
-                    const total = $('.record-checkbox').length;
-                    const checked = $('.record-checkbox:checked').length;
-                    $('#selectAllCheckbox').prop('checked', total === checked && total > 0);
-                });
+    // ========== INDIVIDUAL CHECKBOX ==========
+    $(document).on('change', '.record-checkbox', function() {
+        updateButtons();
+        const total = $('.record-checkbox').length;
+        const checked = $('.record-checkbox:checked').length;
+        $('#selectAllCheckbox').prop('checked', total === checked && total > 0);
+    });
 
-                // ========== UPDATE ALL BUTTONS ==========
-                function updateButtons() {
-                    const selectedIds = getSelectedIds();
-                    const count = selectedIds.length;
+    // ========== UPDATE ALL BUTTONS ==========
+    function updateButtons() {
+        const selectedIds = getSelectedIds();
+        const count = selectedIds.length;
+        $('#selectedCount').text(count);
+        $('#viewSelectedCount').text(count);
+        $('#downloadSelectedBtn').prop('disabled', count === 0);
+        $('#viewSelectedBtn').prop('disabled', count === 0);
+    }
 
-                    $('#selectedCount').text(count);
-                    $('#viewSelectedCount').text(count);
-                    $('#downloadSelectedBtn').prop('disabled', count === 0);
-                    $('#viewSelectedBtn').prop('disabled', count === 0);
-                }
+    // ========== GET SELECTED IDs ==========
+    function getSelectedIds() {
+        const ids = [];
+        $('.record-checkbox:checked').each(function() {
+            ids.push($(this).val());
+        });
+        return ids;
+    }
 
-                // ========== GET SELECTED IDs ==========
-                function getSelectedIds() {
-                    const ids = [];
-                    $('.record-checkbox:checked').each(function() {
-                        ids.push($(this).val());
-                    });
-                    return ids;
-                }
+    // ========== VIEW SELECTED ==========
+    $('#viewSelectedBtn').on('click', function() {
+        const selectedIds = getSelectedIds();
+        if (selectedIds.length === 0) {
+            toastr.warning('Please select at least one record to view');
+            return;
+        }
+        const btn = $(this);
+        const originalHtml = btn.html();
+        btn.html('<i class="fas fa-spinner fa-spin me-1"></i> Loading...').prop('disabled', true);
+        const url = '{{ route('pnl.view-selected') }}?ids=' + selectedIds.join(',');
+        window.open(url, '_blank');
+        btn.html(originalHtml).prop('disabled', false);
+    });
 
-                // ========== VIEW SELECTED ==========
-                $('#viewSelectedBtn').on('click', function() {
-                    const selectedIds = getSelectedIds();
-                    if (selectedIds.length === 0) {
-                        toastr.warning('Please select at least one record to view');
-                        return;
+    // ========== DOWNLOAD SELECTED ==========
+    $('#downloadSelectedBtn').on('click', function() {
+        const selectedIds = getSelectedIds();
+        if (selectedIds.length === 0) {
+            toastr.warning('Please select at least one record to download');
+            return;
+        }
+        const btn = $(this);
+        const originalHtml = btn.html();
+        btn.html('<i class="fas fa-spinner fa-spin me-1"></i> Processing...').prop('disabled', true);
+        const params = new URLSearchParams(window.location.search);
+        $.ajax({
+            url: '{{ route('pnl.export.selected') }}',
+            method: 'POST',
+            data: {
+                ids: selectedIds,
+                search: params.get('search') || '',
+                category: params.get('category') || '',
+                country: params.get('country') || '',
+                status: params.get('status') || '',
+                date_from: params.get('date_from') || '',
+                date_to: params.get('date_to') || '',
+                _token: '{{ csrf_token() }}'
+            },
+            xhrFields: {
+                responseType: 'blob'
+            },
+            success: function(response, status, xhr) {
+                let filename = 'selected_pnl_records.xlsx';
+                const contentDisposition = xhr.getResponseHeader('Content-Disposition');
+                if (contentDisposition) {
+                    const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+                    if (match && match[1]) {
+                        filename = match[1].replace(/['"]/g, '');
                     }
+                }
+                const url = window.URL.createObjectURL(new Blob([response]));
+                const link = document.createElement('a');
+                link.href = url;
+                link.setAttribute('download', filename);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(url);
+                toastr.success(`✅ Downloaded ${selectedIds.length} record(s) successfully!`);
+            },
+            error: function(xhr) {
+                let errorMsg = 'Download failed';
+                try {
+                    const response = JSON.parse(xhr.responseText);
+                    errorMsg = response.message || errorMsg;
+                } catch (e) {}
+                toastr.error(errorMsg);
+            },
+            complete: function() {
+                btn.html(originalHtml).prop('disabled', false);
+            }
+        });
+    });
 
-                    const btn = $(this);
-                    const originalHtml = btn.html();
-                    btn.html('<i class="fas fa-spinner fa-spin me-1"></i> Loading...').prop('disabled', true);
+    // ========== ROW CLICK TO VIEW EMAIL ==========
+    $('.pnl-row').on('click', function(e) {
+        if ($(e.target).closest('.action-btn').length) return;
+        if ($(e.target).closest('.checkbox-col').length) return;
+        const id = $(this).data('id');
+        const modal = new bootstrap.Modal(document.getElementById('pnlEmailModal'));
+        const modalBody = document.getElementById('pnlModalBody');
+        modalBody.innerHTML = `
+            <div class="text-center py-5">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-2 text-muted">Loading email content...</p>
+            </div>
+        `;
+        modal.show();
+        $.ajax({
+            url: '/pnl/view-email/' + id,
+            method: 'GET',
+            success: function(data) {
+                if (data.success) {
+                    let content = data.email.body_html || data.email.body ||
+                        '<p class="text-muted p-4">No content available</p>';
+                    modalBody.innerHTML = '<div class="email-content p-4">' + content + '</div>';
+                }
+            },
+            error: function() {
+                modalBody.innerHTML =
+                    '<div class="alert alert-danger m-4">Error loading email content</div>';
+            }
+        });
+    });
 
-                    const url = '{{ route('pnl.view-selected') }}?ids=' + selectedIds.join(',');
-                    window.open(url, '_blank');
-
-                    btn.html(originalHtml).prop('disabled', false);
-                });
-
-                // ========== DOWNLOAD SELECTED ==========
-                $('#downloadSelectedBtn').on('click', function() {
-                    const selectedIds = getSelectedIds();
-                    if (selectedIds.length === 0) {
-                        toastr.warning('Please select at least one record to download');
-                        return;
-                    }
-
-                    const btn = $(this);
-                    const originalHtml = btn.html();
-                    btn.html('<i class="fas fa-spinner fa-spin me-1"></i> Processing...').prop('disabled',
-                        true);
-
-                    const params = new URLSearchParams(window.location.search);
-
-                    $.ajax({
-                        url: '{{ route('pnl.export.selected') }}',
-                        method: 'POST',
-                        data: {
-                            ids: selectedIds,
-                            search: params.get('search') || '',
-                            category: params.get('category') || '',
-                            country: params.get('country') || '',
-                            status: params.get('status') || '',
-                            date_from: params.get('date_from') || '',
-                            date_to: params.get('date_to') || '',
-                            _token: '{{ csrf_token() }}'
-                        },
-                        xhrFields: {
-                            responseType: 'blob'
-                        },
-                        success: function(response, status, xhr) {
-                            let filename = 'selected_pnl_records.xlsx';
-                            const contentDisposition = xhr.getResponseHeader('Content-Disposition');
-                            if (contentDisposition) {
-                                const match = contentDisposition.match(
-                                    /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-                                if (match && match[1]) {
-                                    filename = match[1].replace(/['"]/g, '');
-                                }
-                            }
-
-                            const url = window.URL.createObjectURL(new Blob([response]));
-                            const link = document.createElement('a');
-                            link.href = url;
-                            link.setAttribute('download', filename);
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                            window.URL.revokeObjectURL(url);
-
-                            toastr.success(
-                                `✅ Downloaded ${selectedIds.length} record(s) successfully!`);
-                        },
-                        error: function(xhr) {
-                            let errorMsg = 'Download failed';
-                            try {
-                                const response = JSON.parse(xhr.responseText);
-                                errorMsg = response.message || errorMsg;
-                            } catch (e) {}
-                            toastr.error(errorMsg);
-                        },
-                        complete: function() {
-                            btn.html(originalHtml).prop('disabled', false);
-                        }
-                    });
-                });
-
-                // ========== ROW CLICK TO VIEW EMAIL ==========
-                $('.pnl-row').on('click', function(e) {
-                    if ($(e.target).closest('.action-btn').length) return;
-                    if ($(e.target).closest('.checkbox-col').length) return;
-
-                    const id = $(this).data('id');
-                    const modal = new bootstrap.Modal(document.getElementById('pnlEmailModal'));
-                    const modalBody = document.getElementById('pnlModalBody');
-
-                    modalBody.innerHTML = `
-                        <div class="text-center py-5">
-                            <div class="spinner-border text-primary" role="status">
-                                <span class="visually-hidden">Loading...</span>
-                            </div>
-                            <p class="mt-2 text-muted">Loading email content...</p>
-                        </div>
-                    `;
-                    modal.show();
-
-                    $.ajax({
-                        url: '/pnl/view-email/' + id,
-                        method: 'GET',
-                        success: function(data) {
-                            if (data.success) {
-                                let content = data.email.body_html || data.email.body ||
-                                    '<p class="text-muted p-4">No content available</p>';
-                                modalBody.innerHTML = '<div class="email-content p-4">' + content +
-                                    '</div>';
-                            }
-                        },
-                        error: function() {
-                            modalBody.innerHTML =
-                                '<div class="alert alert-danger m-4">Error loading email content</div>';
-                        }
-                    });
-                });
+    // ========== PRESERVE FILTERS ON PAGINATION ==========
+    $(document).on('click', '.pagination a', function(e) {
+        e.preventDefault();
+        const url = $(this).attr('href');
+        if (url && url !== '#') {
+            const currentParams = new URLSearchParams(window.location.search);
+            const newUrl = new URL(url, window.location.origin);
+            currentParams.forEach((value, key) => {
+                if (key !== 'page' && !newUrl.searchParams.has(key)) {
+                    newUrl.searchParams.append(key, value);
+                }
             });
-            // ========== REMOVE INDIVIDUAL FILTER ==========
+            const finalUrl = newUrl.toString();
+            $('body').addClass('loading-active');
+            showLoadingOverlay('Loading page...');
+            window.location.href = finalUrl;
+        }
+    });
+
+    // ========== PRESERVE FILTERS ON PER PAGE CHANGE ==========
+    $(document).on('change', 'select[name="per_page"]', function() {
+        const currentParams = new URLSearchParams(window.location.search);
+        const newUrl = new URL(window.location.href, window.location.origin);
+        newUrl.searchParams.set('per_page', $(this).val());
+        currentParams.forEach((value, key) => {
+            if (key !== 'per_page' && !newUrl.searchParams.has(key)) {
+                newUrl.searchParams.append(key, value);
+            }
+        });
+        window.location.href = newUrl.toString();
+    });
+
+    // ========== SHOW LOADING OVERLAY ==========
+    function showLoadingOverlay(message) {
+        if ($('#loading-overlay').length === 0) {
+            $('body').append(`
+                <div id="loading-overlay">
+                    <div class="spinner-border text-light" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p id="loading-message">${message}</p>
+                </div>
+            `);
+        } else {
+            $('#loading-message').text(message);
+            $('#loading-overlay').show();
+        }
+    }
+
+    // Hide overlay on page load
+    $(window).on('load', function() {
+        $('#loading-overlay').hide();
+        $('body').removeClass('loading-active');
+    });
+});
+
+// ========== REMOVE INDIVIDUAL FILTER ==========
 function removeFilter(element) {
-    const filterText = element.parentElement.textContent.replace('×', '').trim();
     const form = document.getElementById('filterForm');
-    
-    // Find which filter this belongs to
+    const filterText = element.parentElement.textContent.replace('×', '').trim();
     const paramMap = {
         'Search': 'search',
         'Destination': 'country',
@@ -1856,14 +1983,11 @@ function removeFilter(element) {
         'Status': 'status',
         'Read': 'read_filter'
     };
-    
-    // Remove the filter by clearing the corresponding input
     for (const [key, param] of Object.entries(paramMap)) {
         if (filterText.includes(key)) {
             const input = document.querySelector(`[name="${param}"]`);
             if (input) {
                 input.value = '';
-                // Also clear the 'to' date for date ranges
                 if (param === 'travel_date_from') {
                     document.querySelector('[name="travel_date_to"]').value = '';
                 }
@@ -1874,10 +1998,8 @@ function removeFilter(element) {
             break;
         }
     }
-    
-    // Submit the form
     form.submit();
 }
-        </script>
-    @endpush
+</script>
+@endpush
 @endsection

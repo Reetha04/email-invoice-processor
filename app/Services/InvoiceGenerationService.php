@@ -221,11 +221,13 @@ class InvoiceGenerationService
         ]);
         
         // Generate PDF based on invoice format
-        if ($invoiceFormat == 'apple_holidays') {
-            $html = $this->generateAppleHolidaysInvoiceHTML($invoice, $email);
-        } else {
-            $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
-        }
+if ($invoiceFormat == 'singapore_aahaas') {
+    $html = $this->generateSingaporeAahaasInvoiceHTML($invoice, $email);
+} elseif ($invoiceFormat == 'apple_holidays') {
+    $html = $this->generateAppleHolidaysInvoiceHTML($invoice, $email);
+} else {
+    $html = $this->generateSharmilaInvoiceHTML($invoice, $email, $calculations);
+}
         
         $pdf = Pdf::loadHTML($html);
         $filename = "invoices/{$fileInvoiceNumber}.pdf";
@@ -772,7 +774,7 @@ protected function htmlToPlainText($html)
     </tr>
 </table>
               <table class="items-table">
-    <thead><tr><th>Description</th><th>UNIT FARE</th><th>DISCount %</th><th>Quantity</th><th class="amount">AMOUNT</th></tr></thead>
+    <thead><tr><th>Description</th><th>UNIT FARE</th><th>Discount %</th><th>Quantity</th><th class="amount">Amount</th></tr></thead>
     <tbody>
         <!-- Cost Per Person row - shows all columns -->
         <tr>
@@ -1674,5 +1676,352 @@ protected function convertToINR($amount, $currency)
     }
     
     return $amount * $rate;
+}
+
+/**
+ * SINGAPORE AAHAAS FORMAT - For RIYA, MAKE MY TRIP, etc.
+ * Keeps original currency (USD, SGD, etc.) - NO conversion
+ */
+public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
+{
+    $agentAddress = $this->getFormattedToAddress($invoice->customer_name);
+    $travelDates = $this->getTravelDates($email);
+    $settlementDate = $this->getSettlementDate($email->travel_start_date, true);
+    $fileHandler = $email->file_handler ?? 'Esther';
+    $totalAmount = $invoice->grand_total;  // Original amount with NO conversion
+    $currency = $email->currency ?? 'USD';  // Original currency
+    
+    $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
+    if ($totalGuests < 1) {
+        $totalGuests = 1;
+    }
+    
+    // If amount is 0, try to get from calculations
+    if ($totalAmount == 0 && $invoice->calculations) {
+        $calc = json_decode($invoice->calculations, true);
+        if ($calc && isset($calc['original_amount'])) {
+            $totalAmount = $calc['original_amount'];
+        }
+    }
+    
+    // Revision note
+    $revisionNote = '';
+    if ($invoice->is_revision && $invoice->revision_number > 0) {
+        $revisionNote = '<div class="revision-note" style="background-color: #fff3cd; padding: 5px 10px; margin-bottom: 10px; border-left: 4px solid #ffc107; font-size: 8pt;">
+            <strong>⚠️ REVISED INVOICE - Revision ' . $invoice->revision_number . '</strong><br>
+            This is a revised invoice. Please disregard any previous invoices for this booking.
+        </div>';
+    }
+    
+    $currencySymbol = $this->getCurrencySymbol($currency);
+    
+    return '
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>INVOICE - ' . $invoice->invoice_number . '</title>
+        <style>
+            @page { margin: 15px; size: A4; }
+            body {
+                font-family: "DejaVu Sans", Arial, sans-serif;
+                margin: 0;
+                padding: 0;
+                background: #fff;
+                font-size: 9pt;
+            }
+            .invoice-container {
+                max-width: 750px;
+                margin: 0 auto;
+                background: white;
+                padding: 20px;
+            }
+            .header {
+                text-align: center;
+                margin-bottom: 15px;
+            }
+            .company-name {
+                font-size: 16pt;
+                font-weight: bold;
+                color: #1a237e;
+                margin-bottom: 3px;
+            }
+            .company-address {
+                font-size: 8pt;
+                color: #333;
+                line-height: 1.4;
+            }
+            .company-contact {
+                font-size: 8pt;
+                color: #333;
+                margin-top: 3px;
+            }
+            .invoice-title {
+                text-align: center;
+                margin: 15px 0 10px 0;
+            }
+            .invoice-title h1 {
+                margin: 0;
+                font-size: 18pt;
+                font-weight: bold;
+                text-decoration: underline;
+            }
+            .to-section {
+                margin: 10px 0 15px 0;
+                line-height: 1.5;
+            }
+            .to-section strong {
+                font-weight: bold;
+            }
+            .to-section .agent-name {
+                font-size: 10pt;
+                font-weight: bold;
+            }
+            .invoice-details {
+                width: 100%;
+                margin: 10px 0;
+                border-collapse: collapse;
+                font-size: 8pt;
+            }
+            .invoice-details td {
+                padding: 4px 8px;
+                vertical-align: top;
+            }
+            .invoice-details .label {
+                font-weight: bold;
+                width: 100px;
+            }
+            .items-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 15px 0;
+                font-size: 8pt;
+            }
+            .items-table th {
+                background-color: #1a237e;
+                color: white;
+                padding: 6px 8px;
+                text-align: left;
+                border: 1px solid #1a237e;
+            }
+            .items-table td {
+                padding: 6px 8px;
+                border: 1px solid #ddd;
+            }
+            .items-table .amount {
+                text-align: right;
+            }
+            .total-section {
+                margin: 10px 0;
+                width: 100%;
+            }
+            .total-table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            .total-table td {
+                padding: 4px 8px;
+                font-size: 8pt;
+            }
+            .total-table .label-cell {
+                text-align: left;
+                width: 50%;
+            }
+            .total-table .amount-cell {
+                text-align: right;
+                width: 50%;
+            }
+            .total-table .total-row {
+                font-weight: bold;
+                font-size: 10pt;
+            }
+            .settlement-text {
+                margin: 10px 0;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+            .payment-details {
+                background: #f5f5f5;
+                padding: 10px 12px;
+                margin: 15px 0;
+                font-size: 7pt;
+                line-height: 1.8;
+            }
+            .payment-details strong {
+                font-size: 8pt;
+            }
+            .footer {
+                margin-top: 15px;
+                font-size: 6pt;
+                text-align: center;
+                color: #666;
+                border-top: 1px solid #ddd;
+                padding-top: 8px;
+            }
+            .remark {
+                margin: 8px 0;
+                padding: 6px 10px;
+                background: #fff3cd;
+                border-left: 3px solid #ffc107;
+                font-size: 8pt;
+            }
+            .staff {
+                margin: 8px 0;
+                font-size: 8pt;
+            }
+            .currency-note {
+                font-size: 7pt;
+                color: #666;
+                margin-top: 5px;
+                font-style: italic;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="invoice-container">
+            <div class="header">
+                <div class="company-name">AAHAAS SINGAPORE PTE LTD</div>
+                <div class="company-address">62 UBI ROAD 1, #07-24, OXLEY BIZHUB 2, Singapore 408734.</div>
+                <div class="company-contact">Tel: +91 95852 29262 | Email: accounts@aahaas.com</div>
+            </div>
+            
+            ' . $revisionNote . '
+            
+            <div class="to-section">
+                <strong>To:</strong> ' . nl2br(htmlspecialchars($agentAddress)) . '
+            </div>
+            
+            <div class="invoice-title">
+                <h1>INVOICE</h1>
+            </div>
+            
+            <table class="invoice-details">
+                <tr>
+                    <td class="label">Invoice No.:</td>
+                    <td><strong>' . $invoice->invoice_number . '</strong></td>
+                    <td class="label">Date:</td>
+                    <td>' . date('d/m/Y', strtotime($invoice->invoice_date)) . '</td>
+                </tr>
+                <tr>
+                    <td class="label">Your Ref.:</td>
+                    <td>' . htmlspecialchars($email->tour_ref ?? '-') . '</td>
+                    <td class="label">Agent ID:</td>
+                    <td>' . htmlspecialchars($email->reference_no ?? '-') . '</td>
+                </tr>
+                <tr>
+                    <td class="label">Sales ID:</td>
+                    <td>' . strtoupper($fileHandler) . '</td>
+                    <td class="label">Guest Name:</td>
+                    <td>' . htmlspecialchars($email->guest_name ?? '-') . '</td>
+                </tr>
+                <tr>
+                    <td class="label">Printed By:</td>
+                    <td>' . strtoupper($invoice->sales_person ?? 'AUTO') . '</td>
+                    <td class="label">GST No.:</td>
+                    <td>' . ($invoice->gst_number ?: 'NA') . '</td>
+                </tr>
+            </table>
+            
+            <table class="items-table">
+                <thead>
+                    <tr>
+                        <th>Description</th>
+                        <th>Unit Fare</th>
+                        <th>Discount</th>
+                        <th>Qty</th>
+                        <th class="amount">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Cost Per Person</td>
+                        <td>' . $currencySymbol . number_format($totalAmount / $totalGuests, 2) . '</td>
+                        <td>0</td>
+                        <td>' . $totalGuests . '</td>
+                        <td class="amount"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="total-section">
+                <table class="total-table">
+                    <tr>
+                        <td class="label-cell"><strong>Total Tour Cost</strong></td>
+                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                    </tr>
+                    <tr>
+                        <td class="label-cell"><strong>Sub Total:</strong></td>
+                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                    </tr>
+                    <tr>
+                        <td class="label-cell"><strong>Total:</strong></td>
+                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                    </tr>
+                    <tr>
+                        <td class="label-cell"><strong>Amount Received:</strong></td>
+                        <td class="amount-cell">' . $currencySymbol . '0.00</td>
+                    </tr>
+                    <tr class="total-row">
+                        <td class="label-cell"><strong>Balance Due:</strong></td>
+                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="remark">
+                <strong>Travel Date:</strong> ' . ($travelDates ?: 'No travel dates specified') . '
+            </div>
+            
+            <div class="settlement-text">
+                Please settle the invoice on or before ' . $settlementDate . '
+            </div>
+            
+            <div class="payment-details">
+                <strong>BANK ACCOUNT DETAILS :</strong><br>
+                Account Name: AAHAAS Singapore Private Limited<br>
+                Bank Account No: 387-914-511-0<br>
+                Bank: United Overseas Bank Limited<br>
+                Bank Code: 7375<br>
+                Branch Code: 332<br>
+                SWIFT Code: UOVBSGSG<br>
+                Address: 80 Raffles Place, UOB Plaza, Singapore 048624
+            </div>
+            
+            <div class="staff">Auto Generated</div>
+            
+            <div class="currency-note">
+                Amount in ' . $currency . ' - No currency conversion applied.
+            </div>
+            
+            <div class="footer">
+                This is a computer generated document - no signature required
+            </div>
+        </div>
+    </body>
+    </html>';
+}
+
+/**
+ * Get currency symbol
+ * For SGD we show "SGD" instead of "S$"
+ */
+protected function getCurrencySymbol($currency)
+{
+    $currency = strtoupper($currency);
+    
+    // ✅ For SGD, show "SGD" (currency code) instead of "S$"
+    if ($currency == 'SGD') {
+        return 'SGD ';
+    }
+    
+    $symbols = [
+        'USD' => '$',
+        'MYR' => 'RM',
+        'INR' => '₹',
+        'EUR' => '€',
+        'GBP' => '£',
+    ];
+    
+    return $symbols[$currency] ?? $currency . ' ';
 }
 }

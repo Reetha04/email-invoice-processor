@@ -208,18 +208,19 @@ public function viewInvoice($id)
     return redirect()->back()->with('error', 'Invoice file not found for: ' . $invoice->invoice_number);
 }
     
-    public function downloadInvoice($id)
-    {
-        $invoice = GeneratedInvoice::findOrFail($id);
-        $path = storage_path("app/public/{$invoice->file_path}");
-        
-        if (file_exists($path)) {
-            return response()->download($path, "{$invoice->invoice_number}.pdf");
-        }
-        
-        return redirect()->back()->with('error', 'Invoice file not found');
+   public function downloadInvoice($id)
+{
+    $invoice = GeneratedInvoice::findOrFail($id);
+    $path = storage_path("app/public/{$invoice->file_path}");
+    
+    if (file_exists($path)) {
+        // ✅ Remove slashes from filename for download
+        $safeFilename = str_replace(['/', '\\'], '_', $invoice->invoice_number);
+        return response()->download($path, "{$safeFilename}.pdf");
     }
     
+    return redirect()->back()->with('error', 'Invoice file not found');
+}
  public function generateAndViewInvoice(Request $request)
     {
         $request->validate([

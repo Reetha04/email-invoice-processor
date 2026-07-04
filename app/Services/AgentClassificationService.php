@@ -65,33 +65,49 @@ class AgentClassificationService
     /**
      * MAIN CLASSIFICATION
      */
-    public function classify($emailBody, $fromEmail, $subject, $agentName = null)
-    {
-        $detectedAgent = $agentName ?: $this->detectAgentName(
-            $emailBody,
-            $fromEmail,
-            $subject
-        );
+public function classify($emailBody, $fromEmail, $subject, $agentName = null)
+{
+    $detectedAgent = $agentName ?: $this->detectAgentName(
+        $emailBody,
+        $fromEmail,
+        $subject
+    );
 
-        $detectedAgent = $this->normalizeAgentName($detectedAgent);
+    $detectedAgent = $this->normalizeAgentName($detectedAgent);
 
-        Log::info("Classification - Detected Agent: " . ($detectedAgent ?: 'Unknown'));
+    Log::info("Classification - Detected Agent: " . ($detectedAgent ?: 'Unknown'));
 
-        // Check if agent is CREDIT (USD - No Handling Fee)
-        if ($this->isCreditAgent($detectedAgent)) {
-            Log::info("Agent classified as CREDIT (USD/No Fee): " . $detectedAgent);
-            return [
-                'credit_type' => 'credit',
-                'display_type' => 'CREDIT',
-                'currency' => 'USD',
-                'has_handling_fee' => false,
-                'invoice_format' => 'apple_holidays',
-                'should_generate_invoice' => true,
-                'reason' => 'Credit Agent (USD/No Fee): ' . $detectedAgent,
-                'agent_normalized' => $detectedAgent,
-                'account_details' => $this->getCreditAccountDetails()
-            ];
-        }
+    // ✅ Check if agent is SINGAPORE AAHAAS format (RIYA, MAKE MY TRIP, etc.)
+    if ($this->isSingaporeAgent($detectedAgent)) {
+        Log::info("Agent classified as SINGAPORE AAHAAS format: " . $detectedAgent);
+        return [
+            'credit_type' => 'credit',
+            'display_type' => 'CREDIT',
+            'currency' => 'ORIGINAL',  // Keep original currency
+            'has_handling_fee' => false,
+            'invoice_format' => 'singapore_aahaas',  // ← New format
+            'should_generate_invoice' => true,
+            'reason' => 'Singapore AAHAAS Agent: ' . $detectedAgent,
+            'agent_normalized' => $detectedAgent,
+            'account_details' => $this->getSingaporeAccountDetails()
+        ];
+    }
+
+    // Check if agent is CREDIT (USD - No Handling Fee) - Apple Holidays
+    if ($this->isCreditAgent($detectedAgent)) {
+        Log::info("Agent classified as CREDIT (USD/No Fee): " . $detectedAgent);
+        return [
+            'credit_type' => 'credit',
+            'display_type' => 'CREDIT',
+            'currency' => 'USD',
+            'has_handling_fee' => false,
+            'invoice_format' => 'apple_holidays',
+            'should_generate_invoice' => true,
+            'reason' => 'Credit Agent (USD/No Fee): ' . $detectedAgent,
+            'agent_normalized' => $detectedAgent,
+            'account_details' => $this->getCreditAccountDetails()
+        ];
+    }
 
         // Check if agent is CREDIT INR (With Handling Fee)
         if ($this->isCreditInrAgent($detectedAgent)) {
@@ -294,4 +310,45 @@ class AgentClassificationService
         }
         return 'USD';
     }
+
+    /**
+ * Check if agent should get Singapore AAHAAS format
+ */
+protected function isSingaporeAgent($agentName)
+{
+    if (!$agentName) {
+        return false;
+    }
+
+    $agentName = strtoupper(trim($agentName));
+    
+    // RIYA agents get Singapore format
+    $singaporeAgents = [
+        'RIYA HOLIDAYS PVT LTD',
+        'RIYA',
+        'RIYA HOLIDAYS',
+      
+    ];
+    
+    foreach ($singaporeAgents as $agent) {
+        $agent = strtoupper(trim($agent));
+        if (strpos($agentName, $agent) !== false || strpos($agent, $agentName) !== false) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+/**
+ * SINGAPORE ACCOUNT DETAILS
+ */
+protected function getSingaporeAccountDetails()
+{
+    return [
+        'company_name' => 'AAHAAS SINGAPORE PTE LTD',
+        'address' => '62 UBI ROAD 1, #07-24, OXLEY BIZHUB 2, Singapore 408734',
+        'email' => 'accounts@aahaas.com',
+        'phone' => '+91 95852 29262',
+    ];
+}
 }

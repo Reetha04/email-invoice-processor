@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
 use App\Mail\InvoiceMail;
 use Illuminate\Support\Facades\Mail;
+use App\Services\OpenAIService;  // Add this line
 
 class MicrosoftGraphService
 {
@@ -182,7 +183,105 @@ public function fetchAllEmails()
         return 0;
     }
 }
-    
+//     public function fetchAllEmails()
+// {
+//     try {
+//         set_time_limit(600);
+        
+//         $allMessages = [];
+//         $totalFetched = 0;
+        
+//         $baseUrl = 'https://graph.microsoft.com/v1.0/users/' . env('GRAPH_INVOICE_USER') . '/mailfolders/inbox/messages';
+        
+//         Log::info("🚀 Starting to fetch TOP 100 emails from INBOX (NEWEST FIRST)...");
+        
+//         // ✅ Get existing message IDs
+//         $existingIds = IncomingEmail::pluck('message_id')->toArray();
+//         $existingIdSet = array_flip($existingIds);
+//         Log::info("📊 Found " . count($existingIds) . " existing emails in database");
+        
+//         // ✅ Fetch only TOP 100 emails (NEWEST FIRST)
+//         $url = $baseUrl . '?' . http_build_query([
+//             '$top' => 100,  // ← Only 100 emails
+//             '$orderby' => 'receivedDateTime desc',  // ← NEWEST FIRST
+//             '$select' => 'id,subject,bodyPreview,from,receivedDateTime,isRead,hasAttachments',
+//         ]);
+        
+//         Log::info("📡 Fetching top 100 emails (NEWEST FIRST)");
+        
+//         $response = Http::withToken($this->accessToken)
+//             ->timeout(180)
+//             ->get($url);
+        
+//         if (!$response->ok()) {
+//             Log::error('Failed to fetch emails: ' . $response->body());
+//             return 0;
+//         }
+        
+//         $data = $response->json();
+//         $messages = $data['value'] ?? [];
+        
+//         if (empty($messages)) {
+//             Log::info("No messages found");
+//             return 0;
+//         }
+        
+//         Log::info("📥 Found " . count($messages) . " messages in top 100");
+        
+//         // ✅ Filter out existing emails
+//         foreach ($messages as $message) {
+//             $messageId = $message['id'];
+            
+//             if (isset($existingIdSet[$messageId])) {
+//                 Log::info("⏭️ Skipping existing email: " . ($message['subject'] ?? 'NO SUBJECT'));
+//                 continue;
+//             }
+            
+//             $existingIdSet[$messageId] = true;
+//             $allMessages[] = $message;
+//             $totalFetched++;
+//         }
+        
+//         Log::info("📥 Total NEW emails to process: " . count($allMessages));
+        
+//         $savedCount = 0;
+//         $failedCount = 0;
+//         $chunkSize = 20;
+        
+//         foreach (array_chunk($allMessages, $chunkSize) as $chunkIndex => $chunk) {
+//             Log::info("📦 Processing chunk " . ($chunkIndex + 1) . " of " . ceil(count($allMessages) / $chunkSize));
+            
+//             foreach ($chunk as $index => $message) {
+//                 try {
+//                     $subject = $message['subject'] ?? 'NO SUBJECT';
+//                     Log::info("🔄 Processing email " . ($index + 1) . ": " . $subject);
+                    
+//                     $saved = $this->processEmail($message);
+                    
+//                     if ($saved === true) {
+//                         $savedCount++;
+//                         Log::info("✅ Successfully processed: " . $subject);
+//                     } else {
+//                         $failedCount++;
+//                         Log::error("❌ Failed to process: " . $subject);
+//                     }
+//                 } catch (\Exception $e) {
+//                     $failedCount++;
+//                     Log::error("❌ Exception processing email: " . ($message['subject'] ?? 'Unknown') . " - " . $e->getMessage() . "\n" . $e->getTraceAsString());
+//                 }
+//             }
+            
+//             usleep(100000);
+//         }
+        
+//         Log::info("📊 Final Summary: {$savedCount} saved, {$failedCount} failed out of " . count($allMessages) . " total");
+//         return $savedCount;
+        
+//     } catch (\Exception $e) {
+//         Log::error('Error fetching emails: ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+//         return 0;
+//     }
+// }
     protected function processEmail($message)
     {
         $messageId = $message['id'];
@@ -270,70 +369,126 @@ protected function saveEmail($message)
         $travelStart = $travelDates['start'];
         $travelEnd = $travelDates['end'];
         
-        // Extract Total Tour Cost
-        $totalAmount = null;
-        $currency = 'USD';
-        
-        Log::info("🔍 Extracting Total Tour Cost from email: " . $subject);
-        
-        // ✅ PATTERN 1: Total Tour Cost with RM (Malaysia)
-        if (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*RM\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            $currency = 'MYR';
-            Log::info("✅ Extracted Total Tour Cost (MYR): RM {$totalAmount}");
-        }
-        // ✅ PATTERN 2: Total Tour Cost with MYR
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*MYR\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            $currency = 'MYR';
-            Log::info("✅ Extracted Total Tour Cost (MYR): MYR {$totalAmount}");
-        }
-        // ✅ PATTERN 3: Total Tour Cost with S$ (Singapore)
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*S\$\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            $currency = 'SGD';
-            Log::info("✅ Extracted Total Tour Cost (SGD): S$ {$totalAmount}");
-        }
-        // ✅ PATTERN 4: Total Tour Cost with SGD
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            $currency = 'SGD';
-            Log::info("✅ Extracted Total Tour Cost (SGD): SGD {$totalAmount}");
-        }
-        // ✅ PATTERN 5: Total Tour Cost with $ (USD)
-        elseif (preg_match('/Total\s+Tour\s+Cost\s*[:\|]?\s*\$?\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-            $totalAmount = floatval(str_replace(',', '', $match[1]));
-            if (stripos($plainText, 'S$') !== false || stripos($plainText, 'SGD') !== false || stripos($plainText, 'Singapore') !== false) {
-                $currency = 'SGD';
-            } else {
-                $currency = 'USD';
-            }
-            Log::info("✅ Extracted Total Tour Cost: {$currency} {$totalAmount}");
-        }
-        
-        // ✅ If still no amount, try ANY amount with currency symbols
-        if (!$totalAmount) {
-            if (preg_match('/RM\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
+       // ==========================================
+// Extract Total Tour Cost
+// ==========================================
+
+$totalAmount = null;
+$currency = null;
+
+Log::info("🔍 Extracting Total Tour Cost from email: {$subject}");
+
+$patterns = [
+
+    // Total Tour Cost
+    '/(?:Total\s*Tour\s*Cost)\s*[:\-]?\s*(USD|SGD|MYR|RM|S\$|\$)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i',
+
+    // Grand Total
+    '/(?:Grand\s*Total)\s*[:\-]?\s*(USD|SGD|MYR|RM|S\$|\$)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i',
+
+    // Total Amount
+    '/(?:Total\s*Amount)\s*[:\-]?\s*(USD|SGD|MYR|RM|S\$|\$)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i',
+
+    // Total Cost
+    '/(?:Total\s*Cost)\s*[:\-]?\s*(USD|SGD|MYR|RM|S\$|\$)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i',
+
+    // Amount Payable
+    '/(?:Amount\s*Payable)\s*[:\-]?\s*(USD|SGD|MYR|RM|S\$|\$)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i',
+
+    // Net Amount
+    '/(?:Net\s*Amount)\s*[:\-]?\s*(USD|SGD|MYR|RM|S\$|\$)?\s*([0-9,]+(?:\.[0-9]{1,2})?)/i',
+
+];
+
+foreach ($patterns as $pattern) {
+
+    if (preg_match($pattern, $plainText, $match)) {
+
+        $currency = strtoupper(trim($match[1] ?? ''));
+
+        switch ($currency) {
+
+            case 'RM':
+            case 'MYR':
                 $currency = 'MYR';
-                Log::info("✅ Found RM amount: {$currency} {$totalAmount}");
-            }
-            elseif (preg_match('/S\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                break;
+
+            case 'S$':
+            case 'SGD':
                 $currency = 'SGD';
-                Log::info("✅ Found S$ amount: {$currency} {$totalAmount}");
-            }
-            elseif (preg_match('/SGD\s*([0-9,]+\.?[0-9]*)/i', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
-                $currency = 'SGD';
-                Log::info("✅ Found SGD amount: {$currency} {$totalAmount}");
-            }
-            elseif (preg_match('/\$\s*([0-9,]+\.?[0-9]*)/', $plainText, $match)) {
-                $totalAmount = floatval(str_replace(',', '', $match[1]));
+                break;
+
+            case '$':
+            case 'USD':
                 $currency = 'USD';
-                Log::info("✅ Found USD amount: {$currency} {$totalAmount}");
-            }
+                break;
+
+            default:
+
+                if (stripos($plainText, 'Singapore') !== false ||
+                    stripos($plainText, 'SGD') !== false ||
+                    stripos($plainText, 'S$') !== false) {
+
+                    $currency = 'SGD';
+
+                } elseif (stripos($plainText, 'Malaysia') !== false ||
+                          stripos($plainText, 'MYR') !== false ||
+                          stripos($plainText, 'RM') !== false) {
+
+                    $currency = 'MYR';
+
+                } else {
+
+                    $currency = 'USD';
+                }
         }
+
+        $totalAmount = floatval(str_replace(',', '', $match[2]));
+
+        Log::info("✅ Regex Total Amount : {$currency} {$totalAmount}");
+
+        break;
+    }
+}
+
+
+// ==========================================
+// Regex failed -> OpenAI
+// ==========================================
+
+if (!$totalAmount) {
+
+    Log::info("🤖 Regex failed. Trying OpenAI...");
+
+    $openAI = app(\App\Services\OpenAIService::class);
+
+    $result = $openAI->extractTotalTourCost($plainText);
+
+    if ($result &&
+        isset($result['amount']) &&
+        !empty($result['amount'])) {
+
+        $totalAmount = (float)$result['amount'];
+        $currency = $result['currency'] ?? 'USD';
+
+        Log::info("✅ OpenAI Total Amount : {$currency} {$totalAmount}");
+    }
+}
+
+
+// ==========================================
+// Final
+// ==========================================
+
+if (!$totalAmount) {
+
+    Log::warning("❌ Total Tour Cost not found.");
+
+    $totalAmount = 0;
+    $currency = 'USD';
+}
+
+Log::info("💰 Final Total Amount : {$currency} {$totalAmount}");
         
         // Extract number of guests
         $numberOfGuests = null;
@@ -949,183 +1104,263 @@ public function debugSaveOne($messageId)
         return $result;
     }
     
-    /**
-     * COMPREHENSIVE Extract Travel Dates - THIS IS THE FULL VERSION FROM YOUR OLD CODE
-     */
-    protected function extractTravelDates($text)
-    {
-        $travelStart = null;
-        $travelEnd = null;
-        
-        // First, try to extract from TOUR CONFIRMATION section
-        $tourSection = '';
-        if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
-            $tourSection = $sectionMatch[1];
-        }
-        $searchText = !empty($tourSection) ? $tourSection : $text;
-        
-        Log::info("Searching for travel dates in text length: " . strlen($searchText));
-        
-        // ========== FORMAT A: Arrival Date + Departure Date ==========
-        if (!$travelStart) {
-            if (preg_match('/Arrival\s*Date[:\s|]*([A-Za-z]+\s+\d{1,2},?\s*\d{4}|\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*[A-Za-z]+)/i', $searchText, $match)) {
-                try {
-                    $dateStr = trim($match[1]);
-                    if (preg_match('/(\d{1,2})\s*[-–]\s*([A-Za-z]+)/i', $dateStr, $dateMatch)) {
-                        $dateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
-                    }
-                    $travelStart = Carbon::parse($dateStr)->format('Y-m-d');
-                    Log::info("Format A - Arrival Date: {$travelStart}");
-                } catch (\Exception $e) {
-                    Log::error("Failed to parse Arrival Date: {$dateStr} - " . $e->getMessage());
-                }
-            }
-        }
-        
-        if (!$travelEnd) {
-            if (preg_match('/Departure\s*Date[:\s|]*([A-Za-z]+\s+\d{1,2},?\s*\d{4}|\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*[A-Za-z]+)/i', $searchText, $match)) {
-                try {
-                    $dateStr = trim($match[1]);
-                    if (preg_match('/(\d{1,2})\s*[-–]\s*([A-Za-z]+)/i', $dateStr, $dateMatch)) {
-                        $dateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
-                    }
-                    $travelEnd = Carbon::parse($dateStr)->format('Y-m-d');
-                    Log::info("Format A - Departure Date: {$travelEnd}");
-                } catch (\Exception $e) {
-                    Log::error("Failed to parse Departure Date: {$dateStr} - " . $e->getMessage());
-                }
-            }
-        }
-        
-        // ========== FORMAT B: Early check-in Table ==========
-        if (!$travelStart || !$travelEnd) {
-            if (preg_match('/Early check-in Date.*?Departure Date.*?(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4}).*?(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4})/is', $searchText, $match)) {
-                try {
-                    $travelStart = Carbon::parse("{$match[2]} {$match[1]}, {$match[3]}")->format('Y-m-d');
-                    $travelEnd = Carbon::parse("{$match[5]} {$match[4]}, {$match[6]}")->format('Y-m-d');
-                    Log::info("Format B - Early check-in table: {$travelStart} to {$travelEnd}");
-                } catch (\Exception $e) {}
-            }
-            elseif (preg_match_all('/(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4})/i', $searchText, $matches, PREG_SET_ORDER)) {
-                if (count($matches) >= 2) {
-                    try {
-                        $travelStart = Carbon::parse("{$matches[0][2]} {$matches[0][1]}, {$matches[0][3]}")->format('Y-m-d');
-                        $travelEnd = Carbon::parse("{$matches[1][2]} {$matches[1][1]}, {$matches[1][3]}")->format('Y-m-d');
-                        Log::info("Format B - Two date pattern: {$travelStart} to {$travelEnd}");
-                    } catch (\Exception $e) {}
-                }
-            }
-        }
-        
-        // ========== FORMAT C: Travel Date field with range ==========
-        if (!$travelStart || !$travelEnd) {
-            if (preg_match('/Travel Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*[-–to]+\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
-                try {
-                    $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                    $travelEnd = Carbon::parse(trim($match[2]))->format('Y-m-d');
-                    Log::info("Format C - Travel Date range: {$travelStart} to {$travelEnd}");
-                } catch (\Exception $e) {}
-            }
-            elseif (preg_match('/Travel Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
-                try {
-                    $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                    $pos = strpos($searchText, $match[0]) + strlen($match[0]);
-                    if (preg_match('/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/', substr($searchText, $pos), $endMatch)) {
-                        $travelEnd = Carbon::parse(trim($endMatch[1]))->format('Y-m-d');
-                        Log::info("Format C - Travel Date with next line: {$travelStart} to {$travelEnd}");
-                    }
-                } catch (\Exception $e) {}
-            }
-        }
-        
-        // ========== FORMAT D: Check In/Check Out ==========
-        if (!$travelStart || !$travelEnd) {
-            if (preg_match('/Check\s*In[:\s]*([A-Za-z]+\s+\d{1,2},?\s*\d{4})/i', $searchText, $match)) {
-                try {
-                    $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                    Log::info("Format D - Check In: {$travelStart}");
-                } catch (\Exception $e) {}
-            }
-            if (preg_match('/Check\s*Out[:\s]*([A-Za-z]+\s+\d{1,2},?\s*\d{4})/i', $searchText, $match)) {
-                try {
-                    $travelEnd = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                    Log::info("Format D - Check Out: {$travelEnd}");
-                } catch (\Exception $e) {}
-            }
-        }
-        
-        // ========== FORMAT E: Date range in itinerary ==========
-        if (!$travelStart || !$travelEnd) {
-            $dateRanges = [];
-            
-            if (preg_match_all('/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})\s*[-–]+\s*([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i', $searchText, $matches, PREG_SET_ORDER)) {
-                foreach ($matches as $match) {
-                    try {
-                        $start = Carbon::parse("{$match[1]} {$match[2]}, {$match[3]}")->format('Y-m-d');
-                        $end = Carbon::parse("{$match[4]} {$match[5]}, {$match[6]}")->format('Y-m-d');
-                        $dateRanges[] = ['start' => $start, 'end' => $end];
-                    } catch (\Exception $e) {}
-                }
-            }
-            
-            if (preg_match_all('/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*[-–]+\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $matches, PREG_SET_ORDER)) {
-                foreach ($matches as $match) {
-                    try {
-                        $start = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                        $end = Carbon::parse(trim($match[2]))->format('Y-m-d');
-                        $dateRanges[] = ['start' => $start, 'end' => $end];
-                    } catch (\Exception $e) {}
-                }
-            }
-            
-            if (!empty($dateRanges)) {
-                $starts = array_column($dateRanges, 'start');
-                $ends = array_column($dateRanges, 'end');
-                $travelStart = min($starts);
-                $travelEnd = max($ends);
-                Log::info("Format E - Combined itinerary dates: {$travelStart} to {$travelEnd}");
-            }
-        }
-        
-        // ========== FORMAT F: Arrival Date + Nights ==========
-        if (!$travelStart && preg_match('/Arrival Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*\w+)/i', $searchText, $match)) {
+protected function extractTravelDates($text)
+{
+    $travelStart = null;
+    $travelEnd = null;
+    
+    // First, try to extract from TOUR CONFIRMATION section
+    $tourSection = '';
+    if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
+        $tourSection = $sectionMatch[1];
+    }
+    $searchText = !empty($tourSection) ? $tourSection : $text;
+    
+    Log::info("Searching for travel dates in text length: " . strlen($searchText));
+    
+    // ========== FORMAT Z: Flexible Arrival Date with spaces ==========
+    // Handles: "Arrival Date: 2026-8 -19 | 141" or "Arrival Date: 2026-8-19"
+    if (!$travelStart) {
+        $cleaned = preg_replace('/Arrival\s*Date\s*[:]?\s*/i', 'ARRIVAL_DATE:', $searchText);
+        if (preg_match('/ARRIVAL_DATE:\s*(\d{4})\s*[-–\/]\s*(\d{1,2})\s*[-–\/]\s*(\d{1,2})/i', $cleaned, $match)) {
             try {
-                $arrivalDateStr = trim($match[1]);
-                if (preg_match('/(\d{1,2})\s*[-–]\s*(\w+)/i', $arrivalDateStr, $dateMatch)) {
-                    $arrivalDateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
+                $dateStr = trim($match[1] . '-' . $match[2] . '-' . $match[3]);
+                $travelStart = Carbon::parse($dateStr)->format('Y-m-d');
+                Log::info("Format Z - Arrival Date (flexible spaces): {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date (flexible): {$match[1]}-{$match[2]}-{$match[3]} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    // ========== FORMAT W: Arrival Date with pipe and spaces ==========
+    if (!$travelStart) {
+        if (preg_match('/Arrival\s*Date\s*[:]?\s*(\d{4}[-\/]\d{1,2})\s*[-–]\s*(\d{1,2})\s*[|]?\s*\d*/i', $searchText, $match)) {
+            try {
+                $dateStr = trim($match[1] . '-' . $match[2]);
+                $travelStart = Carbon::parse($dateStr)->format('Y-m-d');
+                Log::info("Format W - Arrival Date (pipe with spaces): {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date (pipe spaces): {$match[1]}-{$match[2]} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    // ========== FORMAT X: Arrival Date with pipe (no spaces) ==========
+    if (!$travelStart) {
+        if (preg_match('/Arrival\s*Date\s*[:]?\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*[|]\s*\d+/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format X - Arrival Date (pipe 141): {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date (pipe): {$match[1]} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    // ========== FORMAT Y: Simple Arrival Date ==========
+    if (!$travelStart) {
+        if (preg_match('/Arrival\s*Date\s*[:]?\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format Y - Arrival Date (simple): {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date: {$match[1]} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    // ========== FORMAT A: Arrival Date + Departure Date ==========
+    if (!$travelStart) {
+        if (preg_match('/Arrival\s*Date[:\s|]*([A-Za-z]+\s+\d{1,2},?\s*\d{4}|\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*[A-Za-z]+)/i', $searchText, $match)) {
+            try {
+                $dateStr = trim($match[1]);
+                if (preg_match('/(\d{1,2})\s*[-–]\s*([A-Za-z]+)/i', $dateStr, $dateMatch)) {
+                    $dateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
                 }
-                $travelStart = Carbon::parse($arrivalDateStr)->format('Y-m-d');
-                Log::info("Format F - Arrival Date: {$travelStart}");
+                $travelStart = Carbon::parse($dateStr)->format('Y-m-d');
+                Log::info("Format A - Arrival Date: {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date: {$dateStr} - " . $e->getMessage());
+            }
+        }
+    }
+
+    if (!$travelEnd) {
+        if (preg_match('/Departure\s*Date[:\s|]*([A-Za-z]+\s+\d{1,2},?\s*\d{4}|\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*[A-Za-z]+)/i', $searchText, $match)) {
+            try {
+                $dateStr = trim($match[1]);
+                if (preg_match('/(\d{1,2})\s*[-–]\s*([A-Za-z]+)/i', $dateStr, $dateMatch)) {
+                    $dateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
+                }
+                $travelEnd = Carbon::parse($dateStr)->format('Y-m-d');
+                Log::info("Format A - Departure Date: {$travelEnd}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Departure Date: {$dateStr} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    // ========== FORMAT G: Arrival Date with newline ==========
+    if (!$travelStart) {
+        if (preg_match('/Arrival\s*Date\s*[:]\s*\n\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*\n\s*\d+/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format G1 - Arrival Date (with 141): {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date: {$match[1]} - " . $e->getMessage());
+            }
+        } elseif (preg_match('/Arrival\s*Date\s*[:]\s*\n\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format G2 - Arrival Date (newline only): {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date: {$match[1]} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    // ========== FORMAT H: Y-m-d with colon ==========
+    if (!$travelStart) {
+        if (preg_match('/Arrival\s*Date\s*[:]?\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format H - Arrival Date (Y-m-d): {$travelStart}");
+            } catch (\Exception $e) {
+                Log::error("Failed to parse Arrival Date: {$match[1]} - " . $e->getMessage());
+            }
+        }
+    }
+    
+    // ========== FORMAT B: Early check-in Table ==========
+    // ✅ FIX: ONLY run if BOTH start AND end are empty
+    if (!$travelStart && !$travelEnd) {
+        if (preg_match('/Early check-in Date.*?Departure Date.*?(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4}).*?(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4})/is', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse("{$match[2]} {$match[1]}, {$match[3]}")->format('Y-m-d');
+                $travelEnd = Carbon::parse("{$match[5]} {$match[4]}, {$match[6]}")->format('Y-m-d');
+                Log::info("Format B - Early check-in table: {$travelStart} to {$travelEnd}");
+            } catch (\Exception $e) {}
+        } elseif (preg_match_all('/(\d{1,2})\s+([A-Za-z]+)[,\s]*(\d{4})/i', $searchText, $matches, PREG_SET_ORDER)) {
+            if (count($matches) >= 2) {
+                try {
+                    $travelStart = Carbon::parse("{$matches[0][2]} {$matches[0][1]}, {$matches[0][3]}")->format('Y-m-d');
+                    $travelEnd = Carbon::parse("{$matches[1][2]} {$matches[1][1]}, {$matches[1][3]}")->format('Y-m-d');
+                    Log::info("Format B - Two date pattern: {$travelStart} to {$travelEnd}");
+                } catch (\Exception $e) {}
+            }
+        }
+    }
+    
+    // ========== FORMAT C: Travel Date field with range ==========
+    if (!$travelStart || !$travelEnd) {
+        if (preg_match('/Travel Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*[-–to]+\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                $travelEnd = Carbon::parse(trim($match[2]))->format('Y-m-d');
+                Log::info("Format C - Travel Date range: {$travelStart} to {$travelEnd}");
+            } catch (\Exception $e) {}
+        } elseif (preg_match('/Travel Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                $pos = strpos($searchText, $match[0]) + strlen($match[0]);
+                if (preg_match('/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/', substr($searchText, $pos), $endMatch)) {
+                    $travelEnd = Carbon::parse(trim($endMatch[1]))->format('Y-m-d');
+                    Log::info("Format C - Travel Date with next line: {$travelStart} to {$travelEnd}");
+                }
             } catch (\Exception $e) {}
         }
-        
-        // Extract nights if available
-        $nights = null;
-        if (preg_match('/Nights?\s*[:\s]*(\d+)/i', $searchText, $match)) {
-            $nights = intval($match[1]);
-            Log::info("Found nights: {$nights}");
-        }
-        
-        // Calculate end date from nights if we have start but no end
-        if ($travelStart && !$travelEnd && $nights) {
+    }
+    
+    // ========== FORMAT D: Check In/Check Out ==========
+    if (!$travelStart || !$travelEnd) {
+        if (preg_match('/Check\s*In[:\s]*([A-Za-z]+\s+\d{1,2},?\s*\d{4})/i', $searchText, $match)) {
             try {
-                $travelEnd = Carbon::parse($travelStart)->addDays($nights)->format('Y-m-d');
-                Log::info("Calculated end date from nights: {$travelEnd}");
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format D - Check In: {$travelStart}");
             } catch (\Exception $e) {}
         }
+        if (preg_match('/Check\s*Out[:\s]*([A-Za-z]+\s+\d{1,2},?\s*\d{4})/i', $searchText, $match)) {
+            try {
+                $travelEnd = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Format D - Check Out: {$travelEnd}");
+            } catch (\Exception $e) {}
+        }
+    }
+    
+    // ========== FORMAT E: Date range in itinerary ==========
+    if (!$travelStart || !$travelEnd) {
+        $dateRanges = [];
         
-        // ========== FALLBACK: Simple date extraction ==========
-        if (!$travelStart) {
-            if (preg_match('/\b(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\b/', $searchText, $match)) {
+        if (preg_match_all('/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})\s*[-–]+\s*([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i', $searchText, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
                 try {
-                    $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
-                    Log::info("Fallback - Simple start date: {$travelStart}");
+                    $start = Carbon::parse("{$match[1]} {$match[2]}, {$match[3]}")->format('Y-m-d');
+                    $end = Carbon::parse("{$match[4]} {$match[5]}, {$match[6]}")->format('Y-m-d');
+                    $dateRanges[] = ['start' => $start, 'end' => $end];
                 } catch (\Exception $e) {}
             }
         }
         
-        Log::info("FINAL EXTRACTED - Start: {$travelStart}, End: {$travelEnd}");
-            if ($travelStart) {
+        if (preg_match_all('/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s*[-–]+\s*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/i', $searchText, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                try {
+                    $start = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                    $end = Carbon::parse(trim($match[2]))->format('Y-m-d');
+                    $dateRanges[] = ['start' => $start, 'end' => $end];
+                } catch (\Exception $e) {}
+            }
+        }
+        
+        if (!empty($dateRanges)) {
+            $starts = array_column($dateRanges, 'start');
+            $ends = array_column($dateRanges, 'end');
+            $travelStart = min($starts);
+            $travelEnd = max($ends);
+            Log::info("Format E - Combined itinerary dates: {$travelStart} to {$travelEnd}");
+        }
+    }
+    
+    // ========== FORMAT F: Arrival Date + Nights ==========
+    if (!$travelStart && preg_match('/Arrival Date[:\s]*(\d{4}[-\/]\d{1,2}[-\/]\d{1,2}|\d{1,2}\s*[-–]\s*\w+)/i', $searchText, $match)) {
+        try {
+            $arrivalDateStr = trim($match[1]);
+            if (preg_match('/(\d{1,2})\s*[-–]\s*(\w+)/i', $arrivalDateStr, $dateMatch)) {
+                $arrivalDateStr = "{$dateMatch[2]} {$dateMatch[1]}, " . date('Y');
+            }
+            $travelStart = Carbon::parse($arrivalDateStr)->format('Y-m-d');
+            Log::info("Format F - Arrival Date: {$travelStart}");
+        } catch (\Exception $e) {}
+    }
+    
+    // Extract nights if available
+    $nights = null;
+    if (preg_match('/Nights?\s*[:\s]*(\d+)/i', $searchText, $match)) {
+        $nights = intval($match[1]);
+        Log::info("Found nights: {$nights}");
+    }
+    
+    // Calculate end date from nights if we have start but no end
+    if ($travelStart && !$travelEnd && $nights) {
+        try {
+            $travelEnd = Carbon::parse($travelStart)->addDays($nights)->format('Y-m-d');
+            Log::info("Calculated end date from nights: {$travelEnd}");
+        } catch (\Exception $e) {}
+    }
+    
+    // ========== FALLBACK: Simple date extraction ==========
+    if (!$travelStart) {
+        if (preg_match('/\b(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\b/', $searchText, $match)) {
+            try {
+                $travelStart = Carbon::parse(trim($match[1]))->format('Y-m-d');
+                Log::info("Fallback - Simple start date: {$travelStart}");
+            } catch (\Exception $e) {}
+        }
+    }
+    
+    Log::info("FINAL EXTRACTED - Start: {$travelStart}, End: {$travelEnd}");
+    
+    if ($travelStart) {
         try {
             $year = (int)date('Y', strtotime($travelStart));
             if ($year < 2020) {
@@ -1148,8 +1383,9 @@ public function debugSaveOne($messageId)
             Log::warning("Could not parse travel_end: {$travelEnd}");
         }
     }
-        return ['start' => $travelStart, 'end' => $travelEnd];
-    }
+    
+    return ['start' => $travelStart, 'end' => $travelEnd];
+}
     
     protected function cleanText($text)
     {
@@ -1175,7 +1411,13 @@ protected function extractField($text, $fieldName)
     
     $searchText = !empty($tourConfirmationSection) ? $tourConfirmationSection : $text;
     $searchText = preg_replace('/[^\x20-\x7E\x0A\x0D]/u', ' ', $searchText);
-    
+    // Debug: Log the exact line containing Arrival Date
+$lines = explode("\n", $searchText);
+foreach ($lines as $line) {
+    if (stripos($line, 'Arrival') !== false) {
+        Log::info("🔍 Arrival line found: " . $line);
+    }
+}
     // ✅ PATTERN A: Match lines that start with the field name (BEST FOR TABLE FORMAT)
     // Example: "| Agent    | 30 SUNDAYS    |"
     $pattern = '/[|]\s*' . preg_quote($fieldName, '/') . '\s*[|]\s*([^|]+?)\s*[|]/im';
@@ -1324,43 +1566,73 @@ protected function extractField($text, $fieldName)
         }
     }
     
-    protected function extractAgentReferenceNo($text)
-    {
-        $tourSection = '';
-        if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
-            $tourSection = $sectionMatch[1];
-        }
-        $searchText = !empty($tourSection) ? $tourSection : $text;
-        
-        if (preg_match('/Booking\s+ID\s*[:\s]*(NL\d+)/i', $searchText, $match)) {
-            $value = trim($match[1]);
-            Log::info("✓ Extracted Agent Reference (Booking ID): {$value}");
+protected function extractAgentReferenceNo($text)
+{
+    $tourSection = '';
+    if (preg_match('/TOUR CONFIRMATION(.*?)(?:With appreciation|From:|$)/is', $text, $sectionMatch)) {
+        $tourSection = $sectionMatch[1];
+    }
+    $searchText = !empty($tourSection) ? $tourSection : $text;
+    
+    // ✅ STEP 1: Check for Guests ID (ONLY FOR PICK YOUR TRAIL)
+    if (preg_match('/Guests\s+ID\s*[:\s]*([A-Za-z0-9]+)/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        // ❌ Skip if empty or "Sales" or IS patterns
+        if (!empty($value) && 
+            strtoupper($value) !== 'SALES' &&
+            !preg_match('/^IS/i', $value) &&
+            !preg_match('/^VN/i', $value) &&
+            !preg_match('/^SG/i', $value) &&
+            !preg_match('/^MY/i', $value)) {
+            Log::info("✓ Extracted Agent Reference (Guests ID): {$value}");
             return $value;
         }
-        
-        if (preg_match('/Reference\s+No\.?\s*[:\s]*([A-Z0-9]+(?:CNTL)?)/i', $searchText, $match)) {
-            $value = trim($match[1]);
-            if (!preg_match('/CNTL$/i', $value)) {
-                Log::info("✓ Extracted Agent Reference (Reference No): {$value}");
-                return $value;
-            }
-        }
-        
-        if (preg_match('/\b(ORN\d+)\b/i', $searchText, $match)) {
-            $value = trim($match[1]);
-            Log::info("✓ Extracted Agent Reference (ORN): {$value}");
-            return $value;
-        }
-        
-        if (preg_match('/\b(NL\d{10,})\b/i', $searchText, $match)) {
-            $value = trim($match[1]);
-            Log::info("✓ Extracted Agent Reference (NL format): {$value}");
-            return $value;
-        }
-        
-        Log::info("✗ No Agent Reference Number found");
+        // If Guests ID is empty or invalid, DO NOT proceed to other patterns
+        // Just return null (NA)
+        Log::info("⚠️ Guests ID found but empty or invalid - skipping all other patterns");
         return null;
     }
+    
+    // ✅ STEP 2: If NO Guests ID at all, then try other patterns for other agents
+    // But only if they are valid reference numbers (not IS, VN, SG, MY)
+    
+    if (preg_match('/Booking\s+ID\s*[:\s]*(NL\d+)/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted Agent Reference (Booking ID): {$value}");
+        return $value;
+    }
+    
+    // ✅ Reference No - but skip IS, VN, SG, MY (these are invoice numbers)
+    if (preg_match('/Reference\s+No\.?\s*[:\s]*([A-Z0-9]+(?:CNTL)?)/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        // ❌ Skip if it's CNTL (Tour Ref) or "Sales" or IS/VN/SG/MY (Invoice Numbers)
+        if (!preg_match('/CNTL$/i', $value) && 
+            strtoupper($value) !== 'SALES' && 
+            !preg_match('/^IS/i', $value) &&
+            !preg_match('/^VN/i', $value) &&
+            !preg_match('/^SG/i', $value) &&
+            !preg_match('/^MY/i', $value)) {
+            Log::info("✓ Extracted Agent Reference (Reference No): {$value}");
+            return $value;
+        }
+    }
+    
+    if (preg_match('/\b(ORN\d+)\b/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted Agent Reference (ORN): {$value}");
+        return $value;
+    }
+    
+    if (preg_match('/\b(NL\d{10,})\b/i', $searchText, $match)) {
+        $value = trim($match[1]);
+        Log::info("✓ Extracted Agent Reference (NL format): {$value}");
+        return $value;
+    }
+    
+    // ❌ If nothing found, return NULL (becomes "NA")
+    Log::info("✗ No Agent Reference Number found - setting to NA");
+    return null;
+}
     
     protected function extractTourReference($text)
     {
