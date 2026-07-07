@@ -314,8 +314,8 @@ class GenerateDailyPnLReportCommand extends Command
     {
         try {
             $formattedDate = date('d/m/Y', strtotime($date));
-            $to = 'reetha@aahaas.com';
-            $subject = " Daily P&L Report Uploaded - {$formattedDate}";
+            $to = 'pradeep.kumar@bcdtravel.lk';
+            $subject = "Daily P&L Report Uploaded - {$formattedDate}";
             
             $message = "Dear Team,\n\n";
             $message .= "The daily P&L report for {$formattedDate} has been successfully uploaded to the shared OneDrive folder.\n\n";
