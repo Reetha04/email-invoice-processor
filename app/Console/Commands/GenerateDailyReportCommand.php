@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use GuzzleHttp\Client as GuzzleClient;
-
+use Illuminate\Support\Facades\Mail;
 
 class GenerateDailyReportCommand extends Command
 {
@@ -36,7 +36,12 @@ class GenerateDailyReportCommand extends Command
             $this->info("✅ Report generated: {$filePath}");
             
             if ($upload) {
-                $this->uploadToOneDrive($filePath, $date);
+                $uploadSuccess = $this->uploadToOneDrive($filePath, $date);
+                
+                // ✅ Send simple notification email
+                if ($uploadSuccess) {
+                    $this->sendNotificationEmail($date);
+                }
             }
             
             Log::info("✅ Daily report generated for {$date}: {$filePath}");
@@ -48,6 +53,7 @@ class GenerateDailyReportCommand extends Command
             return 1;
         }
     }
+
 
     // ✅ Helper to sanitize strings
     protected function sanitizeString($string)
@@ -255,7 +261,7 @@ protected function getInvoiceBaseNumber($invoice)
         return $start ?: 'NA';
     }
 
-    protected function uploadToOneDrive($filePath, $date)
+   protected function uploadToOneDrive($filePath, $date)
     {
         try {
             $filename = basename($filePath);
@@ -267,14 +273,14 @@ protected function getInvoiceBaseNumber($invoice)
             
             if (!file_exists($filePath) || !is_readable($filePath)) {
                 $this->error("❌ File not found or not readable: {$filePath}");
-                return;
+                return false;
             }
             
             $content = file_get_contents($filePath);
             
             if (empty($content)) {
                 $this->error("❌ File is empty: {$filePath}");
-                return;
+                return false;
             }
             
             $this->info("📄 File size: " . number_format(strlen($content)) . " bytes");
@@ -289,7 +295,7 @@ protected function getInvoiceBaseNumber($invoice)
             if (empty($token)) {
                 $this->error("❌ No access token available.");
                 Log::error("OneDrive upload failed: No access token");
-                return;
+                return false;
             }
             
             $encodedFolder = str_replace(' ', '%20', $folderPath);
@@ -297,7 +303,6 @@ protected function getInvoiceBaseNumber($invoice)
             
             $this->info("📡 Uploading to: " . str_replace($userEmail, '***', $uploadUrl));
             
-            // ✅ Fix: Use Guzzle directly with proper binary body
             $client = new \GuzzleHttp\Client([
                 'timeout' => 120,
                 'verify' => false,
@@ -320,6 +325,8 @@ protected function getInvoiceBaseNumber($invoice)
                 if (isset($fileData['webUrl'])) {
                     $this->info("🔗 File URL: " . $fileData['webUrl']);
                 }
+                
+                return true;
             } else {
                 $this->error("❌ Upload failed: Status " . $response->getStatusCode());
                 $this->error("❌ Response: " . $response->getBody()->getContents());
@@ -327,16 +334,17 @@ protected function getInvoiceBaseNumber($invoice)
                 
                 // Try alternative endpoint
                 $this->info("🔄 Trying alternative endpoint...");
-                $this->uploadToOneDriveAlternative($filePath, $date);
+                return $this->uploadToOneDriveAlternative($filePath, $date);
             }
             
         } catch (\Exception $e) {
             $this->error("❌ Upload error: " . $e->getMessage());
             Log::error("OneDrive upload error: " . $e->getMessage());
+            return false;
         }
     }
 
-    protected function uploadToOneDriveAlternative($filePath, $date)
+   protected function uploadToOneDriveAlternative($filePath, $date)
     {
         try {
             $filename = basename($filePath);
@@ -349,14 +357,13 @@ protected function getInvoiceBaseNumber($invoice)
             
             if (empty($token)) {
                 $this->error("❌ No token for alternative upload");
-                return;
+                return false;
             }
             
             $content = file_get_contents($filePath);
             $encodedFolder = str_replace(' ', '%20', $folderPath);
             $uploadUrl = "https://graph.microsoft.com/v1.0/me/drive/root:{$encodedFolder}{$filename}:/content";
             
-            // ✅ Use Guzzle directly
             $client = new \GuzzleHttp\Client([
                 'timeout' => 120,
                 'verify' => false,
@@ -373,12 +380,49 @@ protected function getInvoiceBaseNumber($invoice)
             if ($response->getStatusCode() >= 200 && $response->getStatusCode() < 300) {
                 $this->info("✅ Uploaded to OneDrive (alternative): {$folderPath}{$filename}");
                 Log::info("Uploaded daily report to OneDrive (alt): {$folderPath}{$filename}");
+                return true;
             } else {
                 $this->error("❌ Alternative upload failed: " . $response->getBody()->getContents());
+                return false;
             }
             
         } catch (\Exception $e) {
             $this->error("❌ Alternative upload error: " . $e->getMessage());
+            return false;
         }
     }
+/**
+ * Send simple notification email
+ */
+protected function sendNotificationEmail($date)
+{
+    try {
+        $formattedDate = date('d/m/Y', strtotime($date));
+        $to = 'pradeep.kumar@bcdtravel.lk';
+        $subject = "Daily Invoice Report Uploaded - {$formattedDate}";
+        
+        $message = "Dear Team,\n\n";
+        $message .= "The daily invoice report for {$formattedDate} has been successfully uploaded to the shared OneDrive folder.\n\n";
+        $message .= "📁 Folder: Invoice Report\n";
+        $message .= "📄 File: daily_invoice_report_{$date}.xlsx\n\n";
+        $message .= "You can access the report from the shared OneDrive folder.\n\n";
+        $message .= "─────────────────────────────\n";
+        $message .= "Generated by: Invoice Processing System\n";
+        $message .= "Time: " . now()->format('d/m/Y H:i:s') . "\n";
+        $message .= "─────────────────────────────\n";
+        $message .= "This is an automated notification.\n";
+
+        Mail::raw($message, function ($mail) use ($to, $subject) {
+            $mail->to($to)->subject($subject);
+        });
+
+        $this->info("📧 Notification email sent to: {$to}");
+        Log::info("Daily report notification sent to: {$to}");
+
+    } catch (\Exception $e) {
+        $this->error("❌ Failed to send notification: " . $e->getMessage());
+        Log::error("Failed to send notification: " . $e->getMessage());
+    }
+}
+    
 }

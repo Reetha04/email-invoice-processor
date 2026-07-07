@@ -24,6 +24,15 @@ return Application::configure(basePath: dirname(__DIR__))
         ->everyFiveMinutes()
         ->withoutOverlapping()  // ✅ Prevents overlapping schedule runs
         ->appendOutputTo(storage_path('logs/pnl_fetch.log'));
-        $schedule->command('report:daily --upload')->dailyAt('23:59')->timezone('Asia/Kolkata');;
+        $schedule->command('report:daily --upload')
+        ->dailyAt('23:59')
+        ->timezone('Asia/Kolkata')
+        ->appendOutputTo(storage_path('logs/daily_report.log'));
+    
+    // ✅ Daily P&L Report at 11:59 PM
+    $schedule->command('pnl:report:daily --upload')
+        ->dailyAt('23:59')
+        ->timezone('Asia/Kolkata')
+        ->appendOutputTo(storage_path('logs/daily_pnl_report.log'));
     })
     ->create();

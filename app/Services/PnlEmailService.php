@@ -585,6 +585,7 @@ if (!empty($mealItems)) {
         $categoriesString = implode(', ', $categoriesFound);
         $exchangeRate = $this->exchangeRates[$countryCode] ?? 25500;
         $tourRef = $tourNumber ? $tourNumber . 'CNTL' : null;
+        $creditType = $this->getCreditTypeFromIncomingEmail($tourRef, $isNumber);
         
                 $record = PnlRecord::create([
     'sno' => $sno,
@@ -629,7 +630,7 @@ if (!empty($mealItems)) {
                 'control_number' => $tourRef,
                 'invoice_number' => $isNumber,
                 'type' => 'INVOICE',
-                'credit_type' => 'Credit',
+                'credit_type' => $creditType,
                 'agent_name' => $agentName,
                 'hotel_name' => null,
                 'service_name' => 'Total Tour Package',
@@ -649,7 +650,7 @@ if (!empty($mealItems)) {
                 'control_number' => $tourRef,
                 'invoice_number' => $isNumber,
                 'type' => $item['type'],
-                'credit_type' => 'Credit',
+                'credit_type' => $creditType,
                 'agent_name' => $agentName,
                 'hotel_name' => $item['hotel_name'],
                 'service_name' => $item['service_name'],
@@ -3692,5 +3693,57 @@ private function getNextVersionCount($baseIsNumber)
     
     // ✅ Fix: First revision = 2, Second = 3, etc.
     return $maxVersionCount == 0 ? 2 : $maxVersionCount + 1;
+}
+private function getCreditTypeFromIncomingEmail($tourRef, $invoiceNumber)
+{
+    try {
+        // ✅ First: Try by tour_ref
+        if ($tourRef && $tourRef !== 'NA' && $tourRef !== 'N/A') {
+            $email = \App\Models\IncomingEmail::where('tour_ref', $tourRef)
+                ->whereNotNull('credit_type')
+                ->first();
+            
+            if ($email) {
+                Log::info("✅ Found credit_type from tour_ref {$tourRef}: {$email->credit_type}");
+                return $email->credit_type;
+            }
+        }
+        
+        // ✅ Second: Try by invoice_number
+        if ($invoiceNumber && $invoiceNumber !== 'NA' && $invoiceNumber !== 'N/A') {
+            // Clean the invoice number (remove revision suffix)
+            $cleanInvoice = preg_replace('/_R\d+\/R\d+$/', '', $invoiceNumber);
+            
+            $email = \App\Models\IncomingEmail::where('invoice_number', $cleanInvoice)
+                ->whereNotNull('credit_type')
+                ->first();
+            
+            if ($email) {
+                Log::info("✅ Found credit_type from invoice_number {$cleanInvoice}: {$email->credit_type}");
+                return $email->credit_type;
+            }
+        }
+        
+        // ✅ Third: Try by is_number
+        if ($invoiceNumber && $invoiceNumber !== 'NA' && $invoiceNumber !== 'N/A') {
+            $cleanIsNumber = preg_replace('/_R\d+\/R\d+$/', '', $invoiceNumber);
+            
+            $email = \App\Models\IncomingEmail::where('invoice_number', $cleanIsNumber)
+                ->whereNotNull('credit_type')
+                ->first();
+            
+            if ($email) {
+                Log::info("✅ Found credit_type from is_number {$cleanIsNumber}: {$email->credit_type}");
+                return $email->credit_type;
+            }
+        }
+        
+        Log::info("⚠️ No matching email found for tour_ref: {$tourRef}, invoice: {$invoiceNumber}, defaulting to Credit");
+        return 'Credit';
+        
+    } catch (\Exception $e) {
+        Log::error('Error getting credit type: ' . $e->getMessage());
+        return 'Credit';
+    }
 }
 }
