@@ -106,21 +106,68 @@ class InvoiceGenerationService
         $exchangeRate = null;
         
         // ✅ CREDIT USD (NO Handling Fee) - Keep in USD
-        if (!$hasHandlingFee) {
-            Log::info("✅ CREDIT USD - No handling fee. Invoice will be in USD.");
-            $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
-            if ($totalGuests < 1) $totalGuests = 1;
-            
-            // ✅ Keep in USD, NO conversion
-            $totalAmount = $originalAmount;
-            $handlingFee = 0;
-            $grandTotal = $originalAmount;
-            $currency = 'USD';  // ← USD
-            $calculations = null;
-            
-            Log::info("✅ Credit USD Invoice: {$originalAmount} USD");
-            
-        } else {
+      // ✅ CREDIT USD (NO Handling Fee) - Keep in USD
+if (!$hasHandlingFee) {
+    Log::info("✅ CREDIT USD - No handling fee. Invoice will be in USD.");
+    $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
+    if ($totalGuests < 1) $totalGuests = 1;
+    
+    // ✅ CONVERT if needed (MYR to USD, SGD to USD)
+    $convertedAmount = $originalAmount;
+    $exchangeRateUsed = 1;
+    $buffer = 0;
+    $originalCurrency = $email->currency ?? 'USD';
+    
+    // ✅ If invoice format is Singapore AAHAAS, convert to USD
+   if ($invoiceFormat == 'singapore_aahaas') {
+    if ($originalCurrency == 'MYR') {
+        // ✅ MYR to USD conversion
+        $exchangeService = new ExchangeRateService();
+        $liveRate = $exchangeService->getRate('MYR', 'USD');
+        $roundedRate = round($liveRate, 2);
+        $buffer = 0;
+        $conversionRate = $roundedRate + $buffer;
+        $convertedAmount = $originalAmount * $conversionRate;
+        $exchangeRateUsed = $conversionRate;
+        
+        Log::info("🔄 Singapore AAHAAS: Converting MYR {$originalAmount} to USD: {$convertedAmount} (Live Rate: {$liveRate} → Rounded: {$roundedRate})");
+        
+    } elseif ($originalCurrency == 'SGD') {
+        // ✅ SGD to USD conversion
+        $exchangeService = new ExchangeRateService();
+        $liveRate = $exchangeService->getRate('SGD', 'USD');
+        $convertedAmount = $originalAmount * $liveRate;
+        $exchangeRateUsed = $liveRate;
+        
+        Log::info("🔄 Singapore AAHAAS: Converting SGD {$originalAmount} to USD: {$convertedAmount} (Rate: {$liveRate})");
+        
+    } else {
+        // ✅ Already USD or other - keep as is
+        $convertedAmount = $originalAmount;
+        Log::info("✅ Singapore AAHAAS: Keeping in USD: {$originalAmount}");
+    }
+}
+    
+    $totalAmount = $originalAmount;  // Keep original for reference
+    $handlingFee = 0;
+    $grandTotal = $convertedAmount;  // ✅ Store CONVERTED amount
+    $currency = 'USD';
+    
+    $calculations = [
+        'original_amount' => $originalAmount,
+        'original_currency' => $originalCurrency,
+        'converted_amount' => $convertedAmount,
+        'converted_currency' => 'USD',
+        'exchange_rate_used' => $exchangeRateUsed,
+        'buffer' => $buffer,
+        'total_guests' => $totalGuests,
+        'per_person_usd' => $convertedAmount / $totalGuests,
+        'invoice_format' => $invoiceFormat,
+        'has_handling_fee' => false,
+    ];
+    
+    Log::info("✅ Credit USD Invoice: {$originalAmount} {$originalCurrency} → {$convertedAmount} USD");
+} else {
             // ✅ WITH Handling Fee - Convert to INR
             Log::info("✅ WITH Handling Fee - Converting to INR");
             
@@ -1679,8 +1726,13 @@ protected function convertToINR($amount, $currency)
 }
 
 /**
- * SINGAPORE AAHAAS FORMAT - For RIYA, MAKE MY TRIP, etc.
- * Keeps original currency (USD, SGD, etc.) - NO conversion
+ * SINGAPORE AAHAAS FORMAT - With Currency Conversion
+ * Converts MYR to USD, SGD to USD using live rates from xe.com
+ */
+/**
+ * SINGAPORE AAHAAS FORMAT - With Currency Conversion
+ * Converts MYR to USD, SGD to USD using live rates from xe.com
+ * ALWAYS DISPLAYS IN USD ($)
  */
 public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
 {
@@ -1688,23 +1740,71 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
     $travelDates = $this->getTravelDates($email);
     $settlementDate = $this->getSettlementDate($email->travel_start_date, true);
     $fileHandler = $email->file_handler ?? 'Esther';
-    $totalAmount = $invoice->grand_total;  // Original amount with NO conversion
-    $currency = $email->currency ?? 'USD';  // Original currency
     
+    // ✅ Get original amount and currency from email
+    $originalAmount = $email->total_amount ?? 0;
+    $originalCurrency = $email->currency ?? 'MYR';
+    
+    // ✅ Get total guests
     $totalGuests = (int)($email->number_of_guests ?? $email->pax_count ?? 1);
     if ($totalGuests < 1) {
         $totalGuests = 1;
     }
     
-    // If amount is 0, try to get from calculations
-    if ($totalAmount == 0 && $invoice->calculations) {
-        $calc = json_decode($invoice->calculations, true);
-        if ($calc && isset($calc['original_amount'])) {
-            $totalAmount = $calc['original_amount'];
-        }
+    // ✅ USE EXCHANGE RATE SERVICE FOR LIVE RATES
+    $exchangeService = new ExchangeRateService();
+    $totalAmountUSD = $originalAmount;
+    $conversionRate = 1;
+    $baseRate = 0;
+    $buffer = 0;
+    $conversionNote = '';
+    
+    if ($originalCurrency == 'MYR') {
+        // ✅ Get live MYR to USD rate from xe.com
+        $liveRate = $exchangeService->getRate('MYR', 'USD');
+        
+        // ✅ Round to 2 decimal places
+        $roundedRate = round($liveRate, 2);
+        
+        // ✅ NO buffer
+        $buffer = 0;
+        $conversionRate = $roundedRate + $buffer;
+        $totalAmountUSD = $originalAmount * $conversionRate;
+        
+        Log::info("🔄 Converting MYR {$originalAmount} to USD: {$totalAmountUSD} (Live Rate: {$liveRate} → Rounded: {$roundedRate})");
+        
+        $conversionNote = "{$originalAmount} MYR × {$conversionRate} = $" . number_format($totalAmountUSD, 2) . " USD";
+        
+    } elseif ($originalCurrency == 'SGD') {
+        // ✅ Get live SGD to USD rate from xe.com
+        $liveRate = $exchangeService->getRate('SGD', 'USD');
+        $baseRate = $liveRate;
+        $buffer = 0.00;
+        $conversionRate = $baseRate + $buffer;
+        $totalAmountUSD = $originalAmount * $conversionRate;
+        
+        Log::info("🔄 Converting SGD {$originalAmount} to USD: {$totalAmountUSD} (Live Rate: {$conversionRate})");
+        
+        $conversionNote = "{$originalAmount} SGD × {$conversionRate} = $" . number_format($totalAmountUSD, 2) . " USD";
+        
+    } else {
+        // ✅ Already USD or other - keep as is
+        $totalAmountUSD = $originalAmount;
+        $conversionRate = 1;
+        
+        Log::info("✅ Keeping in USD: {$totalAmountUSD}");
+        
+        $conversionNote = "No conversion applied - Amount in USD";
     }
     
-    // Revision note
+    // ✅ Calculate per person in USD
+    $perPersonUSD = $totalAmountUSD / $totalGuests;
+    
+    // ✅ ALWAYS USE USD SYMBOL FOR SINGAPORE AAHAAS
+    $currencySymbol = '$';
+    $displayCurrency = 'USD';
+    
+    // ✅ Revision note
     $revisionNote = '';
     if ($invoice->is_revision && $invoice->revision_number > 0) {
         $revisionNote = '<div class="revision-note" style="background-color: #fff3cd; padding: 5px 10px; margin-bottom: 10px; border-left: 4px solid #ffc107; font-size: 8pt;">
@@ -1712,8 +1812,6 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
             This is a revised invoice. Please disregard any previous invoices for this booking.
         </div>';
     }
-    
-    $currencySymbol = $this->getCurrencySymbol($currency);
     
     return '
     <!DOCTYPE html>
@@ -1773,10 +1871,6 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
             .to-section strong {
                 font-weight: bold;
             }
-            .to-section .agent-name {
-                font-size: 10pt;
-                font-weight: bold;
-            }
             .invoice-details {
                 width: 100%;
                 margin: 10px 0;
@@ -1811,6 +1905,10 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
             .items-table .amount {
                 text-align: right;
             }
+            .items-table .highlight {
+                background-color: #e8f4fd;
+                font-weight: bold;
+            }
             .total-section {
                 margin: 10px 0;
                 width: 100%;
@@ -1834,6 +1932,7 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
             .total-table .total-row {
                 font-weight: bold;
                 font-size: 10pt;
+                background-color: #f0f8ff;
             }
             .settlement-text {
                 margin: 10px 0;
@@ -1869,11 +1968,14 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
                 margin: 8px 0;
                 font-size: 8pt;
             }
-            .currency-note {
+            .conversion-info {
                 font-size: 7pt;
-                color: #666;
+                color: #555;
                 margin-top: 5px;
-                font-style: italic;
+                padding: 4px 8px;
+                background: #f8f9fa;
+                border-radius: 4px;
+                border: 1px solid #e9ecef;
             }
         </style>
     </head>
@@ -1925,20 +2027,27 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
             <table class="items-table">
                 <thead>
                     <tr>
-                        <th>Description</th>
-                        <th>Unit Fare</th>
-                        <th>Discount</th>
-                        <th>Qty</th>
-                        <th class="amount">Amount</th>
+                        <th style="width:35%;">Description</th>
+                        <th style="width:15%;">Unit Fare</th>
+                        <th style="width:10%;">Discount</th>
+                        <th style="width:10%;">Qty</th>
+                        <th style="width:30%;" class="amount">Amount</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
                         <td>Cost Per Person</td>
-                        <td>' . $currencySymbol . number_format($totalAmount / $totalGuests, 2) . '</td>
+                        <td>' . $currencySymbol . number_format($perPersonUSD, 2) . '</td>
                         <td>0</td>
                         <td>' . $totalGuests . '</td>
-                        <td class="amount"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                        <td class="amount"><strong>' . $currencySymbol . number_format($totalAmountUSD, 2) . '</strong></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Total Tour Cost</strong></td>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td class="amount highlight"><strong>' . $currencySymbol . number_format($totalAmountUSD, 2) . '</strong></td>
                     </tr>
                 </tbody>
             </table>
@@ -1946,16 +2055,12 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
             <div class="total-section">
                 <table class="total-table">
                     <tr>
-                        <td class="label-cell"><strong>Total Tour Cost</strong></td>
-                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
-                    </tr>
-                    <tr>
                         <td class="label-cell"><strong>Sub Total:</strong></td>
-                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmountUSD, 2) . '</strong></td>
                     </tr>
                     <tr>
                         <td class="label-cell"><strong>Total:</strong></td>
-                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmountUSD, 2) . '</strong></td>
                     </tr>
                     <tr>
                         <td class="label-cell"><strong>Amount Received:</strong></td>
@@ -1963,7 +2068,7 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
                     </tr>
                     <tr class="total-row">
                         <td class="label-cell"><strong>Balance Due:</strong></td>
-                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmount, 2) . '</strong></td>
+                        <td class="amount-cell"><strong>' . $currencySymbol . number_format($totalAmountUSD, 2) . '</strong></td>
                     </tr>
                 </table>
             </div>
@@ -1989,9 +2094,6 @@ public function generateSingaporeAahaasInvoiceHTML($invoice, $email)
             
             <div class="staff">Auto Generated</div>
             
-            <div class="currency-note">
-                Amount in ' . $currency . ' - No currency conversion applied.
-            </div>
             
             <div class="footer">
                 This is a computer generated document - no signature required

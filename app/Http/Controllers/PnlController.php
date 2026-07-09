@@ -119,7 +119,16 @@ class PnlController extends Controller
             $date = Carbon::now()->subMonths($i);
             $months[$date->format('Y-m')] = $date->format('F Y');
         }
-        
+        $stats = [
+    'total' => PnlRecord::count(),
+    'total_amount' => PnlRecord::sum('amount'),
+    'credit_count' => PnlRecord::whereHas('items', function($q) {
+        $q->where('credit_type', 'Credit');
+    })->count(),
+    'non_credit_count' => PnlRecord::whereHas('items', function($q) {
+        $q->where('credit_type', '!=', 'Credit');
+    })->count(),
+];
         return view('pnl.index', compact(
             'pnlRecords', 
             'stats', 
@@ -570,9 +579,27 @@ public function viewSelected(Request $request)
             $html .= '<div class="record-header">';
             $html .= '<h3 class="record-title">Record ' . $recordIndex . ' of ' . $totalRecords . '</h3>';
             $html .= '<div class="record-meta">';
-            $html .= '<span class="badge bg-primary me-2">' . ($record->tour_ref ?? 'N/A') . '</span>';
-            $html .= '<span class="badge bg-secondary me-2">' . ($record->country_code ?? '') . '</span>';
-            $html .= '<span class="badge bg-info">$' . number_format($record->amount, 2) . '</span>';
+            
+            // ✅ Tour Reference
+            $html .= '<span class="badge badge-tour">';
+            $html .= '<i class="fas fa-ticket-alt me-1"></i> ' . ($record->tour_ref ?? 'N/A');
+            $html .= '</span>';
+            
+            // ✅ Country Code
+            $html .= '<span class="badge badge-country">';
+            $html .= '<i class="fas fa-flag me-1"></i> ' . ($record->country_code ?? 'N/A');
+            $html .= '</span>';
+            
+            // ✅ INVOICE NUMBER (IS NUMBER) - NEW
+            $html .= '<span class="badge badge-invoice">';
+            $html .= '<i class="fas fa-file-invoice me-1"></i> IS#' . ($record->is_number ?? 'N/A');
+            $html .= '</span>';
+            
+            // ✅ Amount
+            $html .= '<span class="badge badge-amount">';
+            $html .= '<i class="fas fa-dollar-sign me-1"></i> $' . number_format($record->amount, 2);
+            $html .= '</span>';
+            
             $html .= '</div>';
             $html .= '</div>';
             

@@ -28,56 +28,57 @@
         </div>
 
         <!-- Stats Cards -->
-        <div class="stats-grid">
-            <div class="stat-card stat-card-primary">
-                <div class="stat-icon">
-                    <i class="fas fa-receipt"></i>
-                </div>
-                <div class="stat-info">
-                    <span class="stat-label">Total Records</span>
-                    <h3 class="stat-value">{{ number_format($stats['total'] ?? 0) }}</h3>
-                </div>
-                <div class="stat-trend">
-                    <i class="fas fa-arrow-up"></i>
-                </div>
-            </div>
-            <div class="stat-card stat-card-success">
-                <div class="stat-icon">
-                    <i class="fas fa-dollar-sign"></i>
-                </div>
-                <div class="stat-info">
-                    <span class="stat-label">Total Amount</span>
-                    <h3 class="stat-value">${{ number_format($stats['total_amount'] ?? 0, 2) }}</h3>
-                </div>
-                <div class="stat-trend">
-                    <i class="fas fa-chart-line"></i>
-                </div>
-            </div>
-            <div class="stat-card stat-card-warning">
-                <div class="stat-icon">
-                    <i class="fas fa-clock"></i>
-                </div>
-                <div class="stat-info">
-                    <span class="stat-label">Pending</span>
-                    <h3 class="stat-value">{{ number_format($stats['pending'] ?? 0) }}</h3>
-                </div>
-                <div class="stat-trend">
-                    <i class="fas fa-hourglass-half"></i>
-                </div>
-            </div>
-            <div class="stat-card stat-card-info">
-                <div class="stat-icon">
-                    <i class="fas fa-check-circle"></i>
-                </div>
-                <div class="stat-info">
-                    <span class="stat-label">Approved</span>
-                    <h3 class="stat-value">{{ number_format($stats['approved'] ?? 0) }}</h3>
-                </div>
-                <div class="stat-trend">
-                    <i class="fas fa-check-double"></i>
-                </div>
-            </div>
+        <!-- Stats Cards -->
+<div class="stats-grid">
+    <div class="stat-card stat-card-primary">
+        <div class="stat-icon">
+            <i class="fas fa-receipt"></i>
         </div>
+        <div class="stat-info">
+            <span class="stat-label">Total Records</span>
+            <h3 class="stat-value">{{ number_format($stats['total'] ?? 0) }}</h3>
+        </div>
+        <div class="stat-trend">
+            <i class="fas fa-arrow-up"></i>
+        </div>
+    </div>
+    <div class="stat-card stat-card-success">
+        <div class="stat-icon">
+            <i class="fas fa-dollar-sign"></i>
+        </div>
+        <div class="stat-info">
+            <span class="stat-label">Total Amount</span>
+            <h3 class="stat-value">${{ number_format($stats['total_amount'] ?? 0, 2) }}</h3>
+        </div>
+        <div class="stat-trend">
+            <i class="fas fa-chart-line"></i>
+        </div>
+    </div>
+    <div class="stat-card stat-card-info">
+        <div class="stat-icon">
+            <i class="fas fa-credit-card"></i>
+        </div>
+        <div class="stat-info">
+            <span class="stat-label">Credit Records</span>
+            <h3 class="stat-value">{{ number_format($stats['credit_count'] ?? 0) }}</h3>
+        </div>
+        <div class="stat-trend">
+            <i class="fas fa-check-circle"></i>
+        </div>
+    </div>
+    <div class="stat-card stat-card-warning">
+        <div class="stat-icon">
+            <i class="fas fa-hand-holding-usd"></i>
+        </div>
+        <div class="stat-info">
+            <span class="stat-label">Non-Credit Records</span>
+            <h3 class="stat-value">{{ number_format($stats['non_credit_count'] ?? 0) }}</h3>
+        </div>
+        <div class="stat-trend">
+            <i class="fas fa-exclamation-triangle"></i>
+        </div>
+    </div>
+</div>
 
       <!-- Enhanced Filter Section -->
 <div class="filter-section">

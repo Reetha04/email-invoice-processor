@@ -75,7 +75,63 @@
         flex-wrap: wrap;
         gap: 1rem;
     }
+  .badge-tour {
+        background: #e0f2fe;
+        color: #0369a1;
+        font-size: 0.75rem;
+        padding: 0.4rem 0.8rem;
+        border-radius: 20px;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
 
+    .badge-country {
+        background: #d1fae5;
+        color: #065f46;
+        font-size: 0.75rem;
+        padding: 0.4rem 0.8rem;
+        border-radius: 20px;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+
+    .badge-invoice {
+        background: #ede9fe;
+        color: #5b21b6;
+        font-size: 0.75rem;
+        padding: 0.4rem 0.8rem;
+        border-radius: 20px;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+
+    .badge-amount {
+        background: #fef3c7;
+        color: #92400e;
+        font-size: 0.75rem;
+        padding: 0.4rem 0.8rem;
+        border-radius: 20px;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+
+    /* Optional: Add hover effects */
+    .badge-tour:hover,
+    .badge-country:hover,
+    .badge-invoice:hover,
+    .badge-amount:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        transition: all 0.2s ease;
+    }
     .record-title {
         font-size: 1.1rem;
         font-weight: 600;
