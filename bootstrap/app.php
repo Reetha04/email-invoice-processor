@@ -1,5 +1,7 @@
 <?php
 
+// bootstrap/app.php
+
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -19,20 +21,37 @@ return Application::configure(basePath: dirname(__DIR__))
         //
     })
     ->withSchedule(function (Schedule $schedule) {
+        
+        // ✅ Fetch emails every 5 minutes
         $schedule->command('emails:fetch')->everyFiveMinutes();
-       $schedule->command('pnl:fetch')
-        ->everyFiveMinutes()
-        ->withoutOverlapping()  // ✅ Prevents overlapping schedule runs
-        ->appendOutputTo(storage_path('logs/pnl_fetch.log'));
-        $schedule->command('report:daily --upload')
-        ->dailyAt('23:59')
-        ->timezone('Asia/Kolkata')
-        ->appendOutputTo(storage_path('logs/daily_report.log'));
+        
+        // ✅ Fetch PnL emails every 5 minutes
+        $schedule->command('pnl:fetch')
+            ->everyFiveMinutes()
+            ->withoutOverlapping()
+            ->appendOutputTo(storage_path('logs/pnl_fetch.log'));
+        
+        // ✅ ONE DRIVE SYNC - ALL COUNTRIES (Every 30 minutes)
+     
+        
+         $schedule->command('onedrive:sync --country=MY')->everyThirtyMinutes();
+    $schedule->command('onedrive:sync --country=SG')->everyThirtyMinutes();
+    $schedule->command('onedrive:sync --country=VN')->everyThirtyMinutes();
+    $schedule->command('onedrive:sync --country=LK')->everyThirtyMinutes();
     
-    // ✅ Daily P&L Report at 11:59 PM
-    $schedule->command('pnl:report:daily --upload')
-        ->dailyAt('23:59')
-        ->timezone('Asia/Kolkata')
-        ->appendOutputTo(storage_path('logs/daily_pnl_report.log'));
+    // Process staging every 10 minutes
+    $schedule->command('onedrive:process')->everyTenMinutes();
+        
+        // ✅ Daily Report at 11:59 PM
+        $schedule->command('report:daily --upload')
+            ->dailyAt('23:59')
+            ->timezone('Asia/Kolkata')
+            ->appendOutputTo(storage_path('logs/daily_report.log'));
+        
+        // ✅ Daily P&L Report at 11:59 PM
+        $schedule->command('pnl:report:daily --upload')
+            ->dailyAt('23:59')
+            ->timezone('Asia/Kolkata')
+            ->appendOutputTo(storage_path('logs/daily_pnl_report.log'));
     })
     ->create();

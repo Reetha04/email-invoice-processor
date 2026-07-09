@@ -9,14 +9,14 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('generated_invoices', function (Blueprint $table) {
-            $table->timestamp('email_sent_at')->nullable()->after('file_path');
+            // $table->timestamp('email_sent_at')->nullable()->after('file_path');
         });
     }
 
     public function down(): void
     {
         Schema::table('generated_invoices', function (Blueprint $table) {
-            $table->dropColumn('email_sent_at');
+            // $table->dropColumn('email_sent_at');
         });
     }
 };
