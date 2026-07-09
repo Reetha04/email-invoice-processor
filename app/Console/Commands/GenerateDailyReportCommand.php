@@ -23,7 +23,7 @@ class GenerateDailyReportCommand extends Command
     {
         $date = $this->option('date') ?? date('Y-m-d');
         $upload = $this->option('upload') ?? true;
-        $emailTo = $this->option('email') ?? 'reetha@aahaas.com';
+        $emailTo = $this->option('email') ?? 'pradeep.kumar@bcdtravel.lk';
         
         $this->info("📊 Generating daily report for: {$date}");
         
@@ -448,8 +448,8 @@ protected function sendNotificationEmail($date)
 {
     try {
         $formattedDate = date('d/m/Y', strtotime($date));
-        // $to = 'pradeep.kumar@bcdtravel.lk';
-        $to = 'reetha@aahaas.com';
+        $to = 'pradeep.kumar@bcdtravel.lk';
+        // $to = 'reetha@aahaas.com';
         $subject = "Daily Invoice Report Uploaded - {$formattedDate}";
         
         $message = "Dear Sir,\n\n";
