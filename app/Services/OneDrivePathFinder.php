@@ -11,6 +11,9 @@ class OneDrivePathFinder
     protected $accessToken;
     protected $userEmail;
     protected $baseUrl = 'https://graph.microsoft.com/v1.0';
+    protected $sriLankaDriveId = 'b!50OxHDBzR0OL6moo_OLbEPPv-pKecbJNtUhLzvZUuX6Y6XRiW_09So2E3yephyiW';
+    
+    protected $sriLankaSiteId = 'aahaas.sharepoint.com,1cb143e7-7330-4347-8bea-6a28fce2db10,92faeff3-719e-4db2-b548-4bcef654b97e';
 
     public function __construct()
     {
@@ -53,53 +56,88 @@ class OneDrivePathFinder
         return $this;
     }
 
-    /**
-     * ✅ Find folder path and return user who has access
-     */
-/**
- * ✅ Find folder path and return user who has access - Return YEAR PATH
- */
-public function findPnLFolderWithUser($country = 'MY')
-{
-    try {
-        $geethaEmails = [
-            'geetha.lakshmi@aahaas.com',
-            'geetha_lakshmi@aahaas.com',
-        ];
-        
-        foreach ($geethaEmails as $email) {
-            Log::info("🔍 Trying with user: {$email}");
-            $this->setUser($email);
-            
-            // ✅ Find the YEAR path (not a specific month)
-            $path = $this->findYearPath($country);
-            if ($path) {
-                Log::info("✅ Found year path with user: {$email}");
-                return [
-                    'path' => $path,  // Returns: Reservation/Malaysia Drive/2026
-                    'user' => $email
-                ];
-            }
-        }
-        
-        // Fallback
-        $this->setUser(env('ONEDRIVE_USER', 'accounts@aahaas.com'));
-        $path = $this->findYearPath($country);
-        if ($path) {
-            return [
-                'path' => $path,
-                'user' => $this->userEmail
+ public function findPnLFolderWithUser($country = 'MY')
+    {
+        try {
+            $driveNames = [
+                'MY' => 'Malaysia Drive',
+                'SG' => 'Singapore Drive',
+                'VN' => 'VN OPERATION',
+                'LK' => 'SL Share Drive_',
             ];
+            $driveName = $driveNames[$country] ?? 'Malaysia Drive';
+            $year = date('Y');
+            
+            $countryConfigs = [
+                'MY' => [
+                    'emails' => ['geetha.lakshmi@aahaas.com', 'geetha_lakshmi@aahaas.com', 'accounts@aahaas.com'],
+                    'base_path' => 'Reservation',
+                    'is_sharepoint' => false,
+                ],
+                'SG' => [
+                    'emails' => ['geetha.lakshmi@aahaas.com', 'geetha_lakshmi@aahaas.com', 'accounts@aahaas.com'],
+                    'base_path' => 'Reservation',
+                    'is_sharepoint' => false,
+                ],
+                'VN' => [
+                    'emails' => ['pradeep.Reservation@aahaas.com', 'pradeep_reservation@aahaas.com', 'pradeep@aahaas.com'],
+                    'base_path' => '',
+                    'is_sharepoint' => false,
+                ],
+                'LK' => [
+                    'emails' => ['accounts@aahaas.com'],
+                    'base_path' => 'SL Share Drive_',
+                    'is_sharepoint' => true,
+                    'use_drive_id' => true,
+                ],
+            ];
+            
+            $config = $countryConfigs[$country] ?? $countryConfigs['MY'];
+            $emails = $config['emails'];
+            
+            // ✅ For Sri Lanka, use the direct path with drive ID
+            if ($country === 'LK') {
+                $directPath = "{$config['base_path']}/{$year}"; // "SL Share Drive_/2026"
+                
+                Log::info("🔍 Trying Sri Lanka with drive ID: {$directPath}");
+                $items = $this->getFolderContents($directPath);
+                
+                if (!empty($items)) {
+                    Log::info("✅ Found year path with drive ID: {$directPath}");
+                    return [
+                        'path' => $directPath,
+                        'user' => $this->userEmail,
+                        'drive_id' => $this->sriLankaDriveId,
+                    ];
+                }
+            }
+            
+            // ✅ For other countries
+            foreach ($emails as $email) {
+                $basePath = $config['base_path'];
+                $directPath = "{$basePath}/{$driveName}/{$year}";
+                
+                Log::info("🔍 Trying with user: {$email} at path: {$directPath}");
+                $this->setUser($email);
+                
+                $items = $this->getFolderContents($directPath);
+                if (!empty($items)) {
+                    Log::info("✅ Found year path with user: {$email}: {$directPath}");
+                    return [
+                        'path' => $directPath,
+                        'user' => $email
+                    ];
+                }
+            }
+            
+            Log::warning("⚠️ No folder found for country: {$country}");
+            return null;
+            
+        } catch (\Exception $e) {
+            Log::error("Path finder error: " . $e->getMessage());
+            return null;
         }
-        
-        return null;
-        
-    } catch (\Exception $e) {
-        Log::error("Path finder error: " . $e->getMessage());
-        return null;
     }
-}
-
 /**
  * Find the YEAR path (e.g., Reservation/Malaysia Drive/2026)
  */
@@ -241,13 +279,36 @@ protected function findMonthPath($country)
         return null;
     }
 
-    /**
-     * Get folder contents from OneDrive
-     */
-    public function getFolderContents($path)
+// In OneDrivePathFinder.php
+
+
+
+ public function getFolderContents($path)
     {
         try {
             $encodedPath = str_replace(' ', '%20', $path);
+            
+            // ✅ For Sri Lanka, use drive ID
+            if (strpos($path, 'SL Share Drive') !== false) {
+                Log::info("🔍 Using Drive ID for Sri Lanka: {$path}");
+                
+                $graphUrl = $this->baseUrl . "/drives/{$this->sriLankaDriveId}/root:/{$encodedPath}:/children";
+                Log::info("📡 Graph URL: {$graphUrl}");
+                
+                $response = Http::withToken($this->accessToken)
+                    ->timeout(30)
+                    ->get($graphUrl);
+                
+                if ($response->ok()) {
+                    $data = $response->json();
+                    Log::info("✅ Found " . count($data['value'] ?? []) . " items");
+                    return $data['value'] ?? [];
+                }
+                
+                Log::warning("⚠️ Drive API failed: " . $response->status());
+            }
+            
+            // ✅ Default: Try user drive
             $url = $this->baseUrl . "/users/{$this->userEmail}/drive/root:/{$encodedPath}:/children";
             
             $response = Http::withToken($this->accessToken)
@@ -255,14 +316,14 @@ protected function findMonthPath($country)
                 ->get($url);
             
             if ($response->ok()) {
-                $data = $response->json();
-                return $data['value'] ?? [];
+                return $response->json()['value'] ?? [];
             }
             
+            Log::warning("⚠️ Failed to get folder contents: {$path}");
             return [];
             
         } catch (\Exception $e) {
-            Log::error("Error getting folder contents for {$this->userEmail}: " . $e->getMessage());
+            Log::error("Error getting folder contents: " . $e->getMessage());
             return [];
         }
     }

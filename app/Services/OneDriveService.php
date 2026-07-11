@@ -11,18 +11,19 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 use PhpOffice\PhpWord\IOFactory;
+use App\Models\GeneratedInvoice;  
 
 class OneDriveService
 {
-    protected $accessToken;
+    public $accessToken;
     protected $userEmail;
     protected $baseUrl = 'https://graph.microsoft.com/v1.0';
-
+  protected $sriLankaDriveId = 'b!50OxHDBzR0OL6moo_OLbEPPv-pKecbJNtUhLzvZUuX6Y6XRiW_09So2E3yephyiW';
     protected $countryDrives = [
         'MY' => 'Malaysia Drive',
         'SG' => 'Singapore Drive',
-        'VN' => 'Vietnam Drive',
-        'LK' => 'Sri Lanka Drive',
+        'VN' => 'VN OPERATION',
+        'LK' => 'SL Share Drive_',
     ];
 
     protected $monthFolders = [
@@ -116,18 +117,124 @@ public function syncToStaging($country = 'MY', $month = null)
         $this->setUser($foundUser);
     }
     
-    // ✅ GET ALL MONTH FOLDERS
-    $allMonthFolders = $this->getFolderContents($yearPath);
+    // ✅ For Sri Lanka, get month folders
+    if ($country === 'LK') {
+        $allMonthFolders = $pathFinder->getFolderContents($yearPath);
+        
+        if (empty($allMonthFolders)) {
+            Log::warning("⚠️ No month folders found for Sri Lanka: {$yearPath}");
+            return [
+                'success' => true,
+                'message' => 'No month folders found',
+                'run_id' => $runId,
+                'results' => ['found' => 0, 'processed' => 0, 'skipped' => 0, 'failed' => 0]
+            ];
+        }
+        
+        // ✅ SORT MONTHS - July to December (7 to 12)
+        $monthOrder = [
+            'Jul' => 7, 'Aug' => 8, 'Sep' => 9, 
+            'Oct' => 10, 'Nov' => 11, 'Dec' => 12
+        ];
+        
+        usort($allMonthFolders, function($a, $b) use ($monthOrder) {
+            $monthA = 99;
+            $monthB = 99;
+            
+            foreach ($monthOrder as $name => $num) {
+                if (stripos($a['name'], $name) !== false) {
+                    $monthA = $num;
+                }
+                if (stripos($b['name'], $name) !== false) {
+                    $monthB = $num;
+                }
+            }
+            
+            return $monthA - $monthB;
+        });
+        
+        Log::info("📅 Months sorted: " . implode(', ', array_column($allMonthFolders, 'name')));
+    } else {
+        // ✅ For other countries, get month folders from the year path
+        $allMonthFolders = $this->getFolderContents($yearPath);
+    }
     
-    // ✅ Month numbers to process (July = 07, Aug = 08, Sep = 09, Oct = 10, Nov = 11, Dec = 12)
-    $monthsToProcess = [
-        '07' => '07 July',
-        '08' => '08 Aug', 
-        '09' => '09 sep',
-        '10' => '10 Oct',
-        '11' => '11 November',
-        '12' => '12 December'
-    ];
+    // ✅ Get country-specific month mapping
+    $monthMap = $this->monthFolders;
+    
+    // ✅ DYNAMIC: Determine which months to process based on country and year
+    $currentYear = date('Y');
+    $currentMonth = date('m');
+    $currentDay = date('d');
+    
+    $monthsToProcess = [];
+    
+    // Check if the yearPath contains a specific year
+    $pathYear = null;
+    if (preg_match('/\/(\d{4})$/', $yearPath, $match)) {
+        $pathYear = $match[1];
+    }
+    
+    // If it's a future year (e.g., 2027), process ALL months
+    if ($pathYear && $pathYear > $currentYear) {
+        Log::info("📅 Future year detected: {$pathYear} - Processing ALL months");
+        $monthsToProcess = [
+            '01' => $monthMap['01'] ?? '01 January',
+            '02' => $monthMap['02'] ?? '02 February',
+            '03' => $monthMap['03'] ?? '03 March',
+            '04' => $monthMap['04'] ?? '04 April',
+            '05' => $monthMap['05'] ?? '05 MAY',
+            '06' => $monthMap['06'] ?? '06 June',
+            '07' => $monthMap['07'] ?? '07 July',
+            '08' => $monthMap['08'] ?? '08 Aug',
+            '09' => $monthMap['09'] ?? '09 Sep',
+            '10' => $monthMap['10'] ?? '10 Oct',
+            '11' => $monthMap['11'] ?? '11 November',
+            '12' => $monthMap['12'] ?? '12 December',
+        ];
+    }
+    // ✅ For VIETNAM (VN) - Process July to December with dates >= 11
+    elseif ($country === 'VN') {
+        Log::info("📅 Vietnam: Processing July to December (from July 11 onwards)");
+        $monthsToProcess = [
+            '07' => $monthMap['07'] ?? '07 July',
+            '08' => $monthMap['08'] ?? '08 Aug',
+            '09' => $monthMap['09'] ?? '09 Sep',
+            '10' => $monthMap['10'] ?? '10 Oct',
+            '11' => $monthMap['11'] ?? '11 November',
+            '12' => $monthMap['12'] ?? '12 December',
+        ];
+    }
+    // For current year, process July to December (for MY, SG)
+    elseif ($country === 'MY' || $country === 'SG') {
+        Log::info("📅 Current year: {$pathYear} - Processing July to December (for {$country})");
+        $monthsToProcess = [
+            '07' => $monthMap['07'] ?? '07 July',
+            '08' => $monthMap['08'] ?? '08 Aug',
+            '09' => $monthMap['09'] ?? '09 Sep',
+            '10' => $monthMap['10'] ?? '10 Oct',
+            '11' => $monthMap['11'] ?? '11 November',
+            '12' => $monthMap['12'] ?? '12 December',
+        ];
+    }
+    // For other countries (if any), process ALL months
+    else {
+        Log::info("📅 Current year: {$pathYear} - Processing ALL months (for {$country})");
+        $monthsToProcess = [
+            '01' => $monthMap['01'] ?? '01 January',
+            '02' => $monthMap['02'] ?? '02 February',
+            '03' => $monthMap['03'] ?? '03 March',
+            '04' => $monthMap['04'] ?? '04 April',
+            '05' => $monthMap['05'] ?? '05 MAY',
+            '06' => $monthMap['06'] ?? '06 June',
+            '07' => $monthMap['07'] ?? '07 July',
+            '08' => $monthMap['08'] ?? '08 Aug',
+            '09' => $monthMap['09'] ?? '09 Sep',
+            '10' => $monthMap['10'] ?? '10 Oct',
+            '11' => $monthMap['11'] ?? '11 November',
+            '12' => $monthMap['12'] ?? '12 December',
+        ];
+    }
     
     $results = [
         'found' => 0,
@@ -137,25 +244,33 @@ public function syncToStaging($country = 'MY', $month = null)
         'details' => []
     ];
     
-    // Create process log
+    // ✅ Generate month_year based on what's being processed
+    $monthRange = implode('-', array_keys($monthsToProcess));
+    if (count($monthsToProcess) == 12) {
+        $monthRange = 'all';
+    } elseif (count($monthsToProcess) == 6) {
+        $monthRange = '07-to-12';
+    }
+    
     $log = OneDriveProcessLog::create([
         'run_id' => $runId,
         'country_code' => $country,
-        'month_year' => "{$year}-07-to-12",
+        'month_year' => "{$year}-{$monthRange}",
         'started_at' => now(),
     ]);
     
-    // ✅ PROCESS ONLY MONTHS FROM JULY ONWARDS
+    // ✅ PROCESS MONTHS
     foreach ($allMonthFolders as $monthFolder) {
         if (!($monthFolder['folder'] ?? false)) continue;
         
         $monthName = $monthFolder['name'];
         
-        // ✅ CHECK IF THIS IS A MONTH WE WANT TO PROCESS (JULY - DECEMBER)
+        // ✅ CHECK IF THIS MONTH IS IN OUR PROCESSING LIST
         $isValidMonth = false;
         $monthNumber = null;
+        
         foreach ($monthsToProcess as $monthNum => $validMonth) {
-            if (stripos($monthName, $validMonth) !== false) {
+            if (stripos($validMonth, $monthName) !== false) {
                 $isValidMonth = true;
                 $monthNumber = $monthNum;
                 Log::info("✅ Valid month found: {$monthName} (matches: {$validMonth})");
@@ -163,9 +278,8 @@ public function syncToStaging($country = 'MY', $month = null)
             }
         }
         
-        // ✅ SKIP Jan - June
         if (!$isValidMonth) {
-            Log::info("⏭️ Skipping month (not in July-Dec): {$monthName}");
+            Log::info("⏭️ Skipping month (not in processing list): {$monthName}");
             continue;
         }
         
@@ -175,6 +289,17 @@ public function syncToStaging($country = 'MY', $month = null)
         
         // ✅ GET ALL DATE FOLDERS IN THIS MONTH
         $dateFolders = $this->getFolderContents($monthPath);
+        
+        // ✅ Sort date folders by day number
+        usort($dateFolders, function($a, $b) {
+            preg_match('/^(\d{2})/', $a['name'], $matchA);
+            preg_match('/^(\d{2})/', $b['name'], $matchB);
+            
+            $dayA = intval($matchA[1] ?? 0);
+            $dayB = intval($matchB[1] ?? 0);
+            
+            return $dayA - $dayB;
+        });
         
         foreach ($dateFolders as $dateFolder) {
             if (!($dateFolder['folder'] ?? false)) continue;
@@ -189,27 +314,46 @@ public function syncToStaging($country = 'MY', $month = null)
             
             $day = intval($match[1]);
             
-            // ✅ FIXED: Skip dates based on month
-            // For July: Skip dates BEFORE 11th (1-10)
-            // For August-December: Process ALL dates (1-31)
+            // ✅ SKIP LOGIC: Check if we should skip this date
+            
+            // ✅ For Sri Lanka (LK) - Skip dates before 11th in July
             $shouldSkip = false;
-            if ($monthNumber == '07' && $day < 11) {
-                $shouldSkip = true;
-                Log::info("⏭️ Skipping date before 11th in July: {$dateFolderName} (Day: {$day})");
-            } elseif ($monthNumber != '07' && $day < 1) {
-                // This condition is always false for day >= 1
-                $shouldSkip = false;
+            if ($country === 'LK') {
+                if ($monthNumber == '07' && $day < 11) {
+                    $shouldSkip = true;
+                    Log::info("⏭️ LK: Skipping date before 11th in July: {$dateFolderName} (Day: {$day})");
+                }
+            }
+            
+            // ✅ For Vietnam (VN) - Skip dates BEFORE July 11, but process from July 11 onwards
+            if ($country === 'VN') {
+                // Only apply skip for July month
+                if ($monthNumber == '07' && $day < 11) {
+                    $shouldSkip = true;
+                    Log::info("⏭️ VN: Skipping date before 11th in July: {$dateFolderName} (Day: {$day})");
+                } else {
+                    // ✅ For August, September, October, November, December - Process ALL dates
+                    Log::info("✅ VN: Processing date {$dateFolderName} (Month: {$monthNumber}, Day: {$day})");
+                }
+            }
+            
+            // ✅ For MY and SG - Skip dates before 11th in July
+            if ($country === 'MY' || $country === 'SG') {
+                if ($monthNumber == '07' && $day < 11) {
+                    $shouldSkip = true;
+                    Log::info("⏭️ {$country}: Skipping date before 11th in July: {$dateFolderName} (Day: {$day})");
+                }
             }
             
             if ($shouldSkip) {
                 continue;
             }
             
-            // ✅ PROCESS ALL DATES
+            // ✅ PROCESS ALL DATES FROM JULY 11 ONWARDS
             $datePath = "{$monthPath}/{$dateFolderName}";
             Log::info("📁 Processing date folder: {$datePath} (Day: {$day}, Month: {$monthNumber})");
             
-            // ✅ Get items inside this date folder (booking folders and files)
+            // ✅ Get items inside this date folder
             $items = $this->getFolderContents($datePath);
             
             if (empty($items)) {
@@ -221,7 +365,7 @@ public function syncToStaging($country = 'MY', $month = null)
             
             // ✅ Process each item in the date folder
             foreach ($items as $item) {
-                // If it's a folder (booking folder like "MY40031 - Saratha")
+                // If it's a folder (booking folder)
                 if ($item['folder'] ?? false) {
                     $result = $this->processBookingFolder($item, $datePath, $country, $runId);
                     $results['found']++;
@@ -239,8 +383,17 @@ public function syncToStaging($country = 'MY', $month = null)
                 // If it's a file directly in date folder
                 elseif ($item['file'] ?? false) {
                     $fileName = strtolower($item['name']);
-                    if (strpos($fileName, 'tc') !== false && 
-                        (strpos($fileName, '.docx') !== false || strpos($fileName, '.doc') !== false)) {
+                    
+                    // ✅ For LK: accept any .docx/.doc file; for others, require 'tc' in name
+                    $isValidFile = false;
+                    if ($country === 'LK') {
+                        $isValidFile = (strpos($fileName, '.docx') !== false || strpos($fileName, '.doc') !== false);
+                    } else {
+                        $isValidFile = (strpos($fileName, 'tc') !== false && 
+                                        (strpos($fileName, '.docx') !== false || strpos($fileName, '.doc') !== false));
+                    }
+                    
+                    if ($isValidFile) {
                         $result = $this->processDirectFile($item, $datePath, $country, $runId);
                         $results['found']++;
                         
@@ -276,6 +429,63 @@ public function syncToStaging($country = 'MY', $month = null)
     ];
 }
 
+public function findPnLFolderWithUser($country = 'MY')
+{
+    try {
+        $driveNames = [
+            'MY' => 'Malaysia Drive',
+            'SG' => 'Singapore Drive',
+            'VN' => 'VN OPERATION',
+            'LK' => 'Sri Lanka Drive',
+        ];
+        $driveName = $driveNames[$country] ?? 'Malaysia Drive';
+        $year = date('Y');
+        
+        // ✅ Try direct path first
+        $directPath = "Reservation/{$driveName}/{$year}";
+        
+        $geethaEmails = [
+            'geetha.lakshmi@aahaas.com',
+            'geetha_lakshmi@aahaas.com',
+        ];
+        
+        foreach ($geethaEmails as $email) {
+            Log::info("🔍 Trying with user: {$email} at path: {$directPath}");
+            $this->setUser($email);
+            
+            // ✅ Use a quick check instead of full listing
+            $items = $this->getFolderContents($directPath);
+            if (!empty($items)) {
+                Log::info("✅ Found year path with user: {$email}: {$directPath}");
+                return [
+                    'path' => $directPath,
+                    'user' => $email
+                ];
+            }
+        }
+        
+        // ✅ Try without Reservation prefix
+        $fallbackPath = "{$driveName}/{$year}";
+        Log::info("🔍 Trying fallback path: {$fallbackPath}");
+        
+        $this->setUser(env('ONEDRIVE_USER', 'accounts@aahaas.com'));
+        $items = $this->getFolderContents($fallbackPath);
+        if (!empty($items)) {
+            Log::info("✅ Found year path: {$fallbackPath}");
+            return [
+                'path' => $fallbackPath,
+                'user' => $this->userEmail
+            ];
+        }
+        
+        Log::warning("⚠️ No folder found for country: {$country}");
+        return null;
+        
+    } catch (\Exception $e) {
+        Log::error("Path finder error: " . $e->getMessage());
+        return null;
+    }
+}
 /**
  * Manual fallback path finder
  */
@@ -334,78 +544,300 @@ protected function findPathManually($country = 'MY')
     
     return null;
 }
-    /**
-     * Process a booking folder (contains TC and PNL files)
-     */
-/**
- * Process a booking folder (contains TC and PNL files)
- */
 protected function processBookingFolder($folder, $parentPath, $country, $runId)
 {
     $folderName = $folder['name'];
     $folderPath = "{$parentPath}/{$folderName}";
-    
-    // ✅ Extract invoice number from folder name
+
     $invoiceNumber = $this->extractInvoiceNumber($folderName);
-    
     if (!$invoiceNumber) {
-        Log::warning("⚠️ Could not extract invoice number from: {$folderName}");
-        return [
-            'folder' => $folderName,
-            'invoice_number' => null,
-            'status' => 'failed',
-            'reason' => 'Could not extract invoice number'
-        ];
+        return ['folder' => $folderName, 'invoice_number' => null, 'status' => 'failed', 'reason' => 'Could not extract invoice number'];
     }
-    
-    // ✅ Check if already exists in pnl_records
+
+    // Check if already exists
     $existingPnl = PnlRecord::where('invoice_number', $invoiceNumber)->first();
     if ($existingPnl) {
-        Log::info("⏭️ Skipping - Already in PnL records: {$invoiceNumber}");
-        return [
-            'folder' => $folderName,
-            'invoice_number' => $invoiceNumber,
-            'status' => 'skipped',
-            'reason' => 'Already in PnL records (ID: ' . $existingPnl->id . ')'
-        ];
+        return ['folder' => $folderName, 'invoice_number' => $invoiceNumber, 'status' => 'skipped', 'reason' => 'Already in PnL records'];
     }
-    
-    // ✅ Get files in folder
+
     $files = $this->getFolderContents($folderPath);
-    
+
     $tcFile = null;
     $pnlFile = null;
-    
+
     foreach ($files as $file) {
-        if ($file['file'] ?? false) {
-            $fileName = strtolower($file['name']);
-            // ✅ Look for ANY file with 'tc' in name (case insensitive)
-            if (strpos($fileName, 'tc') !== false && 
-                (strpos($fileName, '.docx') !== false || strpos($fileName, '.doc') !== false)) {
+        if (!($file['file'] ?? false)) continue;
+        $fileName = strtolower($file['name']);
+
+        // TC file: contains 'tc' in name or is .docx and not PNL
+        if ((strpos($fileName, 'tc') !== false || $country === 'LK') && 
+            (strpos($fileName, '.docx') !== false || strpos($fileName, '.doc') !== false)) {
+            // Check if it's NOT a PNL file (PNL files often have 'pnl' or 'P&L')
+            if (strpos($fileName, 'pnl') === false && strpos($fileName, 'p&l') === false) {
                 $tcFile = $file;
-                Log::info("✅ Found TC file: {$file['name']} in {$folderName}");
+                Log::info("✅ Found TC file: {$file['name']}");
             }
-            // Look for PNL files too
-            elseif (strpos($fileName, 'pnl') !== false && 
-                    (strpos($fileName, '.docx') !== false || strpos($fileName, '.doc') !== false)) {
-                $pnlFile = $file;
+        }
+
+        // PNL file: contains 'pnl' or 'P&L' or is a PDF with IS number
+        if (strpos($fileName, 'pnl') !== false || strpos($fileName, 'p&l') !== false || 
+            (strpos($fileName, '.pdf') !== false && preg_match('/IS\d+/i', $fileName))) {
+            $pnlFile = $file;
+            Log::info("✅ Found PNL file: {$file['name']}");
+        }
+    }
+
+    // If no TC file found, fallback to any .docx (for LK)
+    if (!$tcFile && $country === 'LK') {
+        foreach ($files as $file) {
+            if ($file['file'] ?? false) {
+                $fileName = strtolower($file['name']);
+                if ((strpos($fileName, '.docx') !== false || strpos($fileName, '.doc') !== false) &&
+                    strpos($fileName, 'pnl') === false && strpos($fileName, 'p&l') === false) {
+                    $tcFile = $file;
+                    Log::info("✅ Found TC file (fallback): {$file['name']}");
+                    break;
+                }
             }
         }
     }
-    
-    if (!$tcFile) {
-        Log::warning("⚠️ No TC file found in: {$folderName}");
-        return [
-            'folder' => $folderName,
-            'invoice_number' => $invoiceNumber,
-            'status' => 'failed',
-            'reason' => 'No TC file found (looking for any file with "tc" in name)'
-        ];
+
+    if (!$tcFile && !$pnlFile) {
+        Log::warning("⚠️ No TC or PNL file found in: {$folderName}");
+        return ['folder' => $folderName, 'invoice_number' => $invoiceNumber, 'status' => 'failed', 'reason' => 'No TC or PNL file found'];
     }
+
+    // Process TC file first (for invoice record)
+    $tcResult = null;
+    if ($tcFile) {
+        $tcResult = $this->processFileData($tcFile, null, $folderPath, $folderName, $invoiceNumber, $country, $runId);
+        // This creates the PnL record and also processes items from TC (if no PNL file exists)
+    }
+
+    // If PNL file exists, we will process it separately to extract items
+    if ($pnlFile) {
+        // We need the record ID from the TC processing (if TC was processed)
+        $record = null;
+        if ($tcResult && isset($tcResult['record_id'])) {
+            $record = PnlRecord::find($tcResult['record_id']);
+        } else {
+            // If TC didn't create record, we may need to create one from PNL file
+            // but usually TC is the main source for header data.
+            // We'll handle it by creating a minimal record from PNL data if TC fails.
+            $record = $this->createPnlRecordFromPNL($pnlFile, $folderPath, $folderName, $invoiceNumber, $country, $runId);
+        }
+
+        if ($record) {
+            // Parse PNL file and insert items
+            $this->processPnlFile($pnlFile, $folderPath, $record, $country);
+        }
+    }
+
+    // Return result from TC processing (or a combined result)
+    return $tcResult ?? ['folder' => $folderName, 'invoice_number' => $invoiceNumber, 'status' => 'processed', 'reason' => 'PNL processed'];
+}
+protected function createPnlRecordFromPNL($pnlFile, $folderPath, $folderName, $invoiceNumber, $country, $runId)
+{
+    // Download and read PNL file to get basic data
+    $pnlContent = $this->downloadAndReadPnlFile($folderPath, $pnlFile['name'], $country);
+    if (!$pnlContent) return null;
     
-    return $this->processFileData($tcFile, $pnlFile, $folderPath, $folderName, $invoiceNumber, $country, $runId);
+    $text = $pnlContent['text'];
+    
+    // Extract basic fields from PNL
+    $agentName = $this->extractAgentFromPNL($text);
+    $guestName = $this->extractGuestFromPNL($text);
+    $totalAmount = $this->extractTotalAmountFromPNL($text);
+    $pax = $this->extractPaxFromPNL($text);
+    $nights = $this->extractNightsFromPNL($text);
+    
+    // Create record
+    $record = PnlRecord::create([
+        'invoice_number' => $invoiceNumber,
+        'tour_ref' => $this->extractTourRefFromPNL($text),
+        'agent_name' => $agentName,
+        'guest_name' => $guestName,
+        'vendor_name' => $agentName,
+        'amount' => $totalAmount,
+        'currency' => 'USD',
+        'pax_count' => $pax,
+        'country_code' => $country,
+        'category' => 'Tour Package',
+        'status' => 'pending',
+        'processing_status' => 'pending',
+        'source' => 'onedrive',
+        'folder_name' => $folderName,
+        'nights' => $nights,
+        'staging_import_id' => null,
+        'message_id' => 'ONEDRIVE_PNL_' . uniqid(),
+        'subject' => $folderName,
+        'body' => $text,
+        'body_hash' => md5($text),
+        'received_at' => now(),
+        'from_email' => 'onedrive@aahaas.com',
+        'from_name' => 'OneDrive Import',
+        'read_status' => 'read',
+        'is_tour_confirmation' => false,
+        'has_attachments' => false,
+    ]);
+    
+    Log::info("✅ Created PnL record from PNL file: {$invoiceNumber}");
+    return $record;
+}
+protected function extractAgentFromPNL($text)
+{
+    if (preg_match('/Agent:\s*([^\n]+)/i', $text, $match)) {
+        return trim($match[1]);
+    }
+    return null;
 }
 
+protected function extractGuestFromPNL($text)
+{
+    if (preg_match('/Guests?\s+Name:\s*([^\n]+)/i', $text, $match)) {
+        return trim($match[1]);
+    }
+    return null;
+}
+
+protected function extractPaxFromPNL($text)
+{
+    if (preg_match('/No\.\s*Pax:\s*(\d+)/i', $text, $match)) {
+        return intval($match[1]);
+    }
+    if (preg_match('/No\.\s*Adult:\s*(\d+)/i', $text, $match)) {
+        $adult = intval($match[1]);
+        $child = 0;
+        if (preg_match('/No\.\s*Child:\s*(\d+)/i', $text, $match2)) {
+            $child = intval($match2[1]);
+        }
+        return $adult + $child;
+    }
+    return 1;
+}
+
+protected function extractNightsFromPNL($text)
+{
+    if (preg_match('/No\.\s*Night:\s*(\d+)/i', $text, $match)) {
+        return intval($match[1]);
+    }
+    return null;
+}
+
+protected function extractTourRefFromPNL($text)
+{
+    if (preg_match('/Tour\s*(?:No|Ref):\s*#?(\d+)/i', $text, $match)) {
+        return $match[1] . 'CNTL';
+    }
+    return null;
+}
+protected function processPnlFile($pnlFile, $folderPath, $record, $country)
+{
+    try {
+        // Download and read content (supports both docx and pdf)
+        $pnlContent = $this->downloadAndReadPnlFile($folderPath, $pnlFile['name'], $country);
+        
+        if (!$pnlContent) {
+            Log::error("Failed to read PNL file: {$pnlFile['name']}");
+            return;
+        }
+
+        $textContent = $pnlContent['text'] ?? '';
+
+        // Use SriLankaPnLParser to extract items
+        $lkParser = new \App\Services\SriLankaPnLParser();
+        // We need to temporarily set record->body to PNL content for parser
+        $record->body = $textContent;
+        $record->currency = $record->currency ?? 'USD';
+        $record->amount = $record->amount ?? $this->extractTotalAmountFromPNL($textContent);
+
+        $lkParser->parseAndSaveItems($record);
+        Log::info("✅ PNL items parsed and saved for record: {$record->id}");
+        
+        // Also update total amount if not set
+        if ($record->amount == 0) {
+            $total = $this->extractTotalAmountFromPNL($textContent);
+            if ($total > 0) {
+                $record->amount = $total;
+                $record->save();
+            }
+        }
+
+    } catch (\Exception $e) {
+        Log::error("Error processing PNL file: " . $e->getMessage());
+    }
+}
+
+protected function downloadAndReadPnlFile($folderPath, $fileName, $country)
+{
+    // Use downloadAndReadDocx for docx files
+    if (strpos($fileName, '.pdf') !== false) {
+        // For PDF, we need to download and extract text
+        return $this->downloadAndReadPdf($folderPath, $fileName, $country);
+    } else {
+        return $this->downloadAndReadDocx($folderPath, $fileName, $country);
+    }
+}
+
+protected function downloadAndReadPdf($folderPath, $fileName, $country)
+{
+    try {
+        $useDriveId = ($country === 'LK') || strpos($folderPath, 'SL Share Drive') !== false;
+        $remotePath = "{$folderPath}/{$fileName}";
+        $encodedPath = str_replace(' ', '%20', $remotePath);
+        
+        if ($useDriveId) {
+            $url = $this->baseUrl . "/drives/{$this->sriLankaDriveId}/root:/{$encodedPath}:/content";
+        } else {
+            $url = $this->baseUrl . "/users/{$this->userEmail}/drive/root:/{$encodedPath}:/content";
+        }
+        
+        Log::info("📥 Downloading PDF: {$url}");
+        
+        $response = Http::withToken($this->accessToken)
+            ->timeout(60)
+            ->get($url);
+        
+        if (!$response->ok()) {
+            Log::error("Failed to download PDF: {$remotePath}");
+            return null;
+        }
+        
+        $tempFile = tempnam(sys_get_temp_dir(), 'pnl_') . '.pdf';
+        file_put_contents($tempFile, $response->body());
+        
+        // Parse PDF using a library (e.g., Smalot\PdfParser\Parser)
+        $parser = new \Smalot\PdfParser\Parser();
+        $pdf = $parser->parseFile($tempFile);
+        $text = $pdf->getText();
+        
+        @unlink($tempFile);
+        
+        Log::info("📄 Extracted PDF content length: " . strlen($text));
+        
+        // Return in same format as docx extraction
+        return [
+            'text' => $text,
+            'tables' => [] // PDF tables are not extracted, but we can parse text
+        ];
+        
+    } catch (\Exception $e) {
+        Log::error("Error reading PDF: " . $e->getMessage());
+        return null;
+    }
+}
+
+protected function extractTotalAmountFromPNL($text)
+{
+    // Use patterns similar to SriLankaPnLParser::extractTotalAmount
+    if (preg_match('/Total\s+Tour\s+Cost\s*[:]?\s*\$?\s*([\d,]+\.\d{2})/i', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    if (preg_match('/Total\s+Mega\s+Cost\s*[:]?\s*\$?\s*([\d,]+\.\d{2})/i', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    return 0;
+}
     /**
      * Process direct TC file (when files are directly in date folder)
      */
@@ -449,19 +881,13 @@ protected function processBookingFolder($folder, $parentPath, $country, $runId)
         return $this->processFileData($file, null, $parentPath, $folderName, $invoiceNumber, $country, $runId);
     }
 
-    /**
-     * Process file data and create staging record
-     */
-/**
- * Process file data and create staging record
- */
-protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $invoiceNumber, $country, $runId)
+  protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $invoiceNumber, $country, $runId)
 {
     try {
         // Download TC content
-        $tcContent = $this->downloadAndReadDocx($filePath, $tcFile['name']);
+        $docxContent = $this->downloadAndReadDocx($filePath, $tcFile['name'], $country);
         
-        if (!$tcContent) {
+        if (!$docxContent) {
             return [
                 'folder' => $folderName,
                 'invoice_number' => $invoiceNumber,
@@ -470,12 +896,50 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
             ];
         }
         
-        // ✅ Extract the actual date folder from the file path
+        // ✅ EXTRACT DATE AND MONTH FROM THE ACTUAL FILE PATH
         $dateFolder = $this->extractDateFolder($filePath);
         $monthFolder = $this->extractMonthFolder($filePath);
         
-        // ✅ Extract data using OpenAI - gets tour_ref, agent_name, arrival_date, departure_date
-        $extractedData = $this->extractWithOpenAI($tcContent, $folderName, $invoiceNumber);
+        Log::info("📁 Path: {$filePath}");
+        Log::info("📅 Date Folder from path: {$dateFolder}");
+        Log::info("📅 Month Folder from path: {$monthFolder}");
+        
+        // ✅ Store date folder for fallback
+        $this->dateFolder = $dateFolder;
+        $textContent = $docxContent['text'] ?? '';
+        
+        // ✅ Extract data based on country
+        if ($country === 'MY') {
+            // MALAYSIA: Use table extraction (No OpenAI)
+            $extractedData = $this->extractMalaysiaTCData($docxContent, $folderName, $invoiceNumber);
+            Log::info("📊 Malaysia TC extracted using TABLE PARSER for {$invoiceNumber}");
+        } else {
+            // ✅ OTHER COUNTRIES (SG, VN, LK): Use OpenAI
+            $extractedData = $this->extractWithOpenAI($textContent, $folderName, $invoiceNumber);
+            Log::info("📊 OpenAI extraction for {$invoiceNumber} ({$country})");
+        }
+        
+        // ✅ If still no total_amount, try force extraction from text
+        if (empty($extractedData['total_amount']) || $extractedData['total_amount'] == 0) {
+            $extractedData['total_amount'] = $this->extractTotalAmountFromText($textContent);
+            Log::info("💰 Force extracted total amount: {$extractedData['total_amount']}");
+        }
+        
+        // ✅ If country is LK, ensure currency is USD
+        if ($country === 'LK') {
+            $extractedData['currency'] = 'USD';
+        }
+        
+        if (empty($extractedData['file_handler'])) {
+            $extractedData['file_handler'] = $this->extractFileHandlerFromFolderName($folderName);
+            if ($extractedData['file_handler']) {
+                Log::info("📁 File Handler from folder name: " . $extractedData['file_handler']);
+            }
+        }
+        
+        // ✅ Ensure date_folder and month_folder are from the path
+        $extractedData['date_folder_from_path'] = $dateFolder;
+        $extractedData['month_folder_from_path'] = $monthFolder;
         
         // ✅ Log what was extracted
         Log::info("📊 Extracted Data for {$invoiceNumber}:");
@@ -483,34 +947,46 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
         Log::info("  - Agent: " . ($extractedData['agent_name'] ?? 'NULL'));
         Log::info("  - Arrival: " . ($extractedData['arrival_date'] ?? 'NULL'));
         Log::info("  - Departure: " . ($extractedData['departure_date'] ?? 'NULL'));
+        Log::info("  - Nights: " . ($extractedData['nights'] ?? 'NULL'));
+        Log::info("  - Total Amount: " . ($extractedData['total_amount'] ?? 'NULL'));
+        Log::info("  - Currency: " . ($extractedData['currency'] ?? 'NULL'));
+        Log::info("  - Date Folder (from path): {$dateFolder}");
+        Log::info("  - Month Folder (from path): {$monthFolder}");
         
-        // ✅ Save to staging with tour_ref
+        // ✅ Save to staging
         $import = OneDriveImport::create([
             'folder_name' => $folderName,
             'invoice_number' => $invoiceNumber,
-            'tour_ref' => $extractedData['tour_ref'] ?? null,  // ✅ THIS IS THE KEY
+            'tour_ref' => $extractedData['tour_ref'] ?? null,
             'country_code' => $country,
-            'month_folder' => $monthFolder ?? $this->monthFolders[date('m')],
-            'date_folder' => $dateFolder ?? date('d') . ' July',
-            'tc_file_content' => $tcContent,
+            'month_folder' => $monthFolder,
+            'date_folder' => $dateFolder,
+            'tc_file_content' => $docxContent['text'] ?? '',
             'tc_file_path' => $tcFile['name'],
             'pnl_file_path' => $pnlFile ? $pnlFile['name'] : null,
             'extracted_data' => $extractedData,
             'status' => 'pending',
             'processed_at' => null,
+            'pax_count' => $extractedData['guest_count'] ?? null,
+            'total_amount' => $extractedData['total_amount'] ?? null,
+            'currency' => $extractedData['currency'] ?? 'MYR',
         ]);
         
         Log::info("✅ Saved to OneDriveImport with tour_ref: " . ($extractedData['tour_ref'] ?? 'NULL'));
+        Log::info("✅ Month Folder saved: {$monthFolder}");
+        Log::info("✅ Date Folder saved: {$dateFolder}");
         
         // Process immediately
         $this->processStagingRecord($import->id);
-        
+         $record = PnlRecord::where('invoice_number', $invoiceNumber)->first();
+    $recordId = $record ? $record->id : null;
         return [
             'folder' => $folderName,
             'invoice_number' => $invoiceNumber,
             'tour_ref' => $extractedData['tour_ref'] ?? null,
             'status' => 'processed',
             'import_id' => $import->id,
+             'record_id' => $recordId, 
             'reason' => 'Saved to staging and processed'
         ];
         
@@ -536,7 +1012,6 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
         ];
     }
 }
-
 /**
  * ✅ Extract date folder from path
  * Example: "Reservation/Malaysia Drive/2026/07 July/11 July" → "11 July"
@@ -545,25 +1020,11 @@ protected function extractDateFolder($path)
 {
     $parts = explode('/', $path);
     foreach ($parts as $part) {
-        if (preg_match('/^(\d{2})\s+([A-Za-z]+)$/', $part)) {
-            return $part;
-        }
-    }
-    return null;
-}
-
-/**
- * ✅ Extract month folder from path
- * Example: "Reservation/Malaysia Drive/2026/07 July/11 July" → "07 July"
- */
-protected function extractMonthFolder($path)
-{
-    $parts = explode('/', $path);
-    foreach ($parts as $part) {
-        if (preg_match('/^(\d{2})\s+([A-Za-z]+)$/', $part)) {
-            // Check if it's a month (01-12)
-            $monthNum = intval($part);
-            if ($monthNum >= 1 && $monthNum <= 12) {
+        // ✅ Match "11 July" format (day + month)
+        if (preg_match('/^(\d{2})\s+([A-Za-z]+)$/', $part, $match)) {
+            $day = intval($match[1]);
+            // ✅ Only return if it's a valid day (1-31)
+            if ($day >= 1 && $day <= 31) {
                 return $part;
             }
         }
@@ -571,81 +1032,235 @@ protected function extractMonthFolder($path)
     return null;
 }
 
-    /**
-     * Process a staging record and create P&L
-     */
-    public function processStagingRecord($importId)
-    {
-        $import = OneDriveImport::find($importId);
-        
-        if (!$import) {
-            Log::error("Import record not found: {$importId}");
-            return false;
-        }
-        
-        if ($import->status != 'pending') {
-            Log::info("Import already processed: {$importId} (Status: {$import->status})");
-            return false;
-        }
-        
-        try {
-            $import->update(['status' => 'processing']);
-            
-            $data = $import->extracted_data;
-            
-            // Check again if P&L exists (double-check)
-            $existingPnl = PnlRecord::where('invoice_number', $import->invoice_number)->first();
-            
-            if ($existingPnl) {
-                $import->update([
-                    'status' => 'skipped',
-                    'skip_reason' => 'Already in PnL records (ID: ' . $existingPnl->id . ')',
-                    'processed_at' => now(),
-                ]);
-                return true;
+protected function extractMonthFolder($path)
+{
+    $parts = explode('/', $path);
+    
+    // ✅ First try: Look for "01 Apr" format (day + month abbreviation)
+    foreach ($parts as $part) {
+        // Match "01 Apr" or "30 Apr" format
+        if (preg_match('/^\d{2}\s+([A-Za-z]+)$/', $part, $match)) {
+            $monthName = $match[1];
+            // Check if it's a valid month name/abbreviation
+            $monthNumber = $this->getMonthNumber($monthName);
+            if ($monthNumber) {
+                // Return in standard format: "01 Apr" or "30 Apr"
+                return $part;
             }
-            
-            // Create P&L Record
-            $record = $this->createPnLRecord($data, $import);
-            
-            if (!$record) {
-                $import->update([
-                    'status' => 'failed',
-                    'error_message' => 'Failed to create P&L record',
-                    'processed_at' => now(),
-                ]);
-                return false;
-            }
-            
-            // Create P&L Items
-            $this->createPnLItems($data, $record);
-            
-            // Update import status
-            $import->update([
-                'status' => 'processed',
-                'processed_at' => now(),
-            ]);
-            
-            Log::info("✅ Successfully processed import: {$importId} -> P&L Record: {$record->id}");
-            
-            // Generate invoice if possible
-            $this->generateInvoiceFromRecord($record);
-            
-            return true;
-            
-        } catch (\Exception $e) {
-            Log::error("Failed to process staging record: " . $e->getMessage());
-            
-            $import->update([
-                'status' => 'failed',
-                'error_message' => $e->getMessage(),
-                'processed_at' => now(),
-            ]);
-            
-            return false;
         }
     }
+    
+    // ✅ Second try: Look for "07 July" format (month number + month name)
+    foreach ($parts as $part) {
+        if (preg_match('/^(\d{2})\s+([A-Za-z]+)$/', $part, $match)) {
+            $monthNum = intval($match[1]);
+            if ($monthNum >= 1 && $monthNum <= 12) {
+                return $part;
+            }
+        }
+    }
+    
+    return null;
+}
 
+public function processStagingRecord($importId)
+{
+    $import = OneDriveImport::find($importId);
+    
+    if (!$import) {
+        Log::error("Import record not found: {$importId}");
+        return false;
+    }
+    
+    if ($import->status != 'pending') {
+        Log::info("Import already processed: {$importId} (Status: {$import->status})");
+        return false;
+    }
+    
+    try {
+        $import->update(['status' => 'processing']);
+        
+        $data = $import->extracted_data;
+        
+        // ✅ FORCE total_amount from import
+        $data['total_amount'] = $import->total_amount ?? $data['total_amount'] ?? 0;
+        
+        // ✅ If still 0, extract from TC content
+        if ($data['total_amount'] == 0 && $import->tc_file_content) {
+            if (preg_match('/Total\s+Tour\s+Cost\s*[:|\s]+(RM|MYR|USD|SGD)?\s*([0-9,]+\.\d{2})/i', $import->tc_file_content, $match)) {
+                $data['total_amount'] = floatval(str_replace(',', '', $match[2]));
+                Log::info("💰 Extracted total from TC: {$data['total_amount']}");
+            }
+        }
+        
+        Log::info("💰 Processing with total_amount: {$data['total_amount']}");
+        
+        // Check again if P&L exists
+        $existingPnl = PnlRecord::where('invoice_number', $import->invoice_number)->first();
+        
+        if ($existingPnl) {
+            $import->update([
+                'status' => 'skipped',
+                'skip_reason' => 'Already in PnL records (ID: ' . $existingPnl->id . ')',
+                'processed_at' => now(),
+            ]);
+            return true;
+        }
+        
+        // Create P&L Record
+        $record = $this->createPnLRecord($data, $import);
+         $this->generateInvoiceFromTCData($data, $import, $record);
+        if (!$record) {
+            $import->update([
+                'status' => 'failed',
+                'error_message' => 'Failed to create P&L record',
+                'processed_at' => now(),
+            ]);
+            return false;
+        }
+        
+        // Create P&L Items
+        $this->createPnLItems($data, $record);
+        
+        // Update import status
+        $import->update([
+            'status' => 'processed',
+            'processed_at' => now(),
+        ]);
+        
+Log::info("✅ Successfully processed import: {$importId} -> P&L Record: {$record->id} with amount: {$record->amount}");
+        // Generate invoice
+        $this->generateInvoiceFromRecord($record);
+        
+        return true;
+        
+    } catch (\Exception $e) {
+        Log::error("Failed to process staging record: " . $e->getMessage());
+        
+        $import->update([
+            'status' => 'failed',
+            'error_message' => $e->getMessage(),
+            'processed_at' => now(),
+        ]);
+        
+        return false;
+    }
+}
+protected function generateInvoiceFromTCData($data, $import, $record)
+{
+    try {
+        $existing = GeneratedInvoice::where('invoice_number', $import->invoice_number)->first();
+        if ($existing) {
+            Log::info("⏭️ Invoice already exists: {$import->invoice_number}");
+            return;
+        }
+        
+        // ✅ Extract numeric guest count
+        $guestCount = $data['guest_count'] ?? 1;
+        if (is_string($guestCount)) {
+            if (preg_match('/(\d+)/', $guestCount, $match)) {
+                $guestCount = intval($match[1]);
+            } else {
+                $guestCount = 1;
+            }
+        } elseif (!is_numeric($guestCount)) {
+            $guestCount = 1;
+        }
+        $guestCount = (int) $guestCount;
+        
+        Log::info("👤 Guest Count extracted: {$guestCount}");
+        $fileHandler = $data['file_handler'] ?? null;
+        
+        // ✅ If still null, try from folder name
+        if (!$fileHandler) {
+            $fileHandler = $this->extractFileHandlerFromFolderName($import->folder_name);
+        }
+        
+        Log::info("👤 File Handler: " . ($fileHandler ?? 'NULL'));
+        // ✅ Build email data
+        $email = \App\Models\IncomingEmail::create([
+            'message_id' => 'ONEDRIVE_' . $import->id . '_' . time(),
+            'from_email' => 'onedrive@aahaas.com',
+            'from_name' => 'OneDrive Import',
+            'subject' => $import->folder_name,
+            'body' => $import->tc_file_content ?? '',
+            'body_preview' => substr($import->tc_file_content ?? '', 0, 500),
+            'received_at' => now(),
+            'agent_name' => $data['agent_name'] ?? null,
+            'guest_name' => $data['guest_name'] ?? null,
+            'tour_ref' => $data['tour_ref'] ?? 'NA',
+            'invoice_number' => $import->invoice_number,
+            'file_handler' => $data['file_handler'] ?? null,
+            'travel_start_date' => $data['arrival_date'] ?? null,
+            'travel_end_date' => $data['departure_date'] ?? null,
+            'number_of_guests' => $guestCount,    // ✅ Integer
+            'pax_count' => $guestCount,           // ✅ Integer
+            'total_amount' => $import->total_amount ?? $data['total_amount'] ?? 0,
+            'currency' => $import->currency ?? $data['currency'] ?? 'USD',
+            'is_tour_confirmation' => true,
+            'processing_status' => 'pending',
+            'read_status' => 'read',
+            'has_attachments' => false,
+        ]);
+        
+        Log::info("📧 Created email record for invoice: " . $email->id);
+        
+        $invoiceService = app(\App\Services\InvoiceGenerationService::class);
+        $invoice = $invoiceService->generateFromEmail($email);
+        
+        if ($invoice) {
+            Log::info("✅ Generated invoice from TC: {$invoice->invoice_number}");
+            // ❌ MAIL COMMENTED
+            return $invoice;
+        }
+        
+    } catch (\Exception $e) {
+        Log::error("Failed to generate invoice from TC: " . $e->getMessage());
+    }
+    
+    return null;
+}
+/**
+ * ✅ Extract file handler from folder name
+ * Pattern: "IS48475 - Ammar Anees" → "Ammar Anees"
+ */
+/**
+ * ✅ Extract file handler from folder name - IMPROVED for Malaysia
+ * Pattern: "MY40031- saratha" → "Saratha"
+ *          "MY40031 - Saratha" → "Saratha"
+ *          "MY23122- madhu" → "Madhu"
+ */
+protected function extractFileHandlerFromFolderName($folderName)
+{
+    if (empty($folderName)) {
+        return null;
+    }
+    
+    // Pattern: "MY40031- saratha" or "MY40031 - Saratha" → extract after " - " or "-"
+    if (preg_match('/^[A-Z]{2}\d+\s*[-_]\s*(.+)$/i', $folderName, $match)) {
+        $handler = trim($match[1]);
+        // Remove CANCELLED or extra text
+        $handler = preg_replace('/\s*CANCELLED\s*/i', '', $handler);
+        $handler = preg_replace('/\s*CANCELLED\s*-\s*/i', '', $handler);
+        $handler = preg_replace('/\s*-\s*OneDrive\s*$/i', '', $handler);
+        $handler = preg_replace('/\s*Confirmation\s*$/i', '', $handler);
+        $handler = preg_replace('/\s*cancel\s*$/i', '', $handler, 1);
+        
+        // Capitalize first letter of each word
+        $handler = ucwords(strtolower($handler));
+        
+        return $handler;
+    }
+    
+    // Pattern: "MY40031_saratha" → extract after "_"
+    if (preg_match('/^[A-Z]{2}\d+_\s*(.+)$/i', $folderName, $match)) {
+        $handler = trim($match[1]);
+        $handler = ucwords(strtolower($handler));
+        return $handler;
+    }
+    
+    return null;
+}
     /**
      * Process all pending staging records
      */
@@ -672,12 +1287,7 @@ protected function extractMonthFolder($path)
         return $results;
     }
 
-    /**
-     * Extract invoice number from folder name
-     */
-/**
- * Extract invoice number from folder name - FIXED for lowercase
- */
+
 protected function extractInvoiceNumber($folderName)
 {
     // Pattern: "my23122- madhu" → "MY23122" (case-insensitive)
@@ -695,17 +1305,28 @@ protected function extractInvoiceNumber($folderName)
         return strtoupper($match[1]) . $match[2];
     }
     
+    // Pattern: "MY 40027- Saratha" → "MY40027" (with space)
+    if (preg_match('/^([A-Z]{2})\s+(\d+)/i', $folderName, $match)) {
+        return strtoupper($match[1]) . $match[2];
+    }
+    
     return null;
 }
 
-/**
- * Download and read DOCX file - IMPROVED
- */
-protected function downloadAndReadDocx($folderPath, $fileName)
+protected function downloadAndReadDocx($folderPath, $fileName, $country = null)
 {
     try {
+        $useDriveId = ($country === 'LK') || strpos($folderPath, 'SL Share Drive') !== false;
         $remotePath = "{$folderPath}/{$fileName}";
-        $url = $this->baseUrl . "/users/{$this->userEmail}/drive/root:/{$remotePath}:/content";
+        $encodedPath = str_replace(' ', '%20', $remotePath);
+        
+        if ($useDriveId) {
+            $url = $this->baseUrl . "/drives/{$this->sriLankaDriveId}/root:/{$encodedPath}:/content";
+        } else {
+            $url = $this->baseUrl . "/users/{$this->userEmail}/drive/root:/{$encodedPath}:/content";
+        }
+        
+        Log::info("📥 Downloading: {$url}");
         
         $response = Http::withToken($this->accessToken)
             ->timeout(60)
@@ -719,66 +1340,582 @@ protected function downloadAndReadDocx($folderPath, $fileName)
         $tempFile = tempnam(sys_get_temp_dir(), 'tc_') . '.docx';
         file_put_contents($tempFile, $response->body());
         
-        // Read DOCX
         $phpWord = IOFactory::load($tempFile);
-        $text = '';
-        
-        foreach ($phpWord->getSections() as $section) {
-            foreach ($section->getElements() as $element) {
-                if (method_exists($element, 'getElements')) {
-                    foreach ($element->getElements() as $child) {
-                        if (method_exists($child, 'getText')) {
-                            $text .= $child->getText() . ' ';
-                        }
-                    }
-                } elseif (method_exists($element, 'getText')) {
-                    $text .= $element->getText() . ' ';
-                }
-            }
-        }
+        $result = $this->extractDocxContent($phpWord);
         
         @unlink($tempFile);
         
-        // ✅ CLEAN THE CONTENT - Remove special characters
-        $text = preg_replace('/[^\x20-\x7E]/', ' ', $text); // Remove non-ASCII
-        $text = preg_replace('/\s+/', ' ', $text); // Remove extra spaces
-        $text = trim($text);
+        Log::info("📄 Extracted content length: " . strlen($result['text']));
+        Log::info("📊 Found " . count($result['tables']) . " tables");
         
-        Log::info("📄 Cleaned TC content length: " . strlen($text));
-        Log::info("📄 First 500 chars: " . substr($text, 0, 500));
-        
-        return $text;
+        return $result;
         
     } catch (\Exception $e) {
         Log::error("Error reading DOCX: " . $e->getMessage());
         return null;
     }
 }
+/**
+ * ✅ Extract content from DOCX including tables - BULLETPROOF FIX
+ */
+protected function extractDocxContent($phpWord)
+{
+    $text = '';
+    $tables = [];
+    
+    try {
+        foreach ($phpWord->getSections() as $section) {
+            foreach ($section->getElements() as $element) {
+                
+                // 1. Handle Tables
+                if ($element instanceof \PhpOffice\PhpWord\Element\Table) {
+                    $tableData = $this->extractTableData($element);
+                    if (!empty($tableData)) {
+                        $tables[] = $tableData;
+                        $text .= $this->tableToText($tableData) . ' ';
+                    }
+                    continue;
+                }
+                
+                // 2. SAFE text extraction - use try-catch for each element
+                try {
+                    $elementText = $this->extractElementText($element);
+                    if (!empty($elementText)) {
+                        $text .= $elementText . ' ';
+                    }
+                } catch (\Exception $e) {
+                    // Skip problematic elements
+                    continue;
+                }
+            }
+        }
+    } catch (\Exception $e) {
+        Log::warning("⚠️ DOCX extraction warning: " . $e->getMessage());
+    }
+    
+    // Clean text
+    $text = preg_replace('/[^\x20-\x7E]/', ' ', $text);
+    $text = preg_replace('/\s+/', ' ', $text);
+    $text = trim($text);
+    
+    return [
+        'text' => $text,
+        'tables' => $tables
+    ];
+}
+
+/**
+ * ✅ SAFE: Extract text from any element
+ */
+protected function extractElementText($element)
+{
+    // If it's a Text element
+    if ($element instanceof \PhpOffice\PhpWord\Element\Text) {
+        return $element->getText() ?? '';
+    }
+    
+    // If it's a TextRun
+    if ($element instanceof \PhpOffice\PhpWord\Element\TextRun) {
+        $text = '';
+        foreach ($element->getElements() as $child) {
+            $text .= $this->extractElementText($child);
+        }
+        return $text;
+    }
+    
+    // If it's a Paragraph
+    if ($element instanceof \PhpOffice\PhpWord\Element\Paragraph) {
+        $text = '';
+        foreach ($element->getElements() as $child) {
+            $text .= $this->extractElementText($child);
+        }
+        return $text;
+    }
+    
+    // If it has a getText method
+    if (method_exists($element, 'getText')) {
+        try {
+            $text = $element->getText();
+            return is_string($text) ? $text : '';
+        } catch (\Exception $e) {
+            return '';
+        }
+    }
+    
+    // If it has getElements method (generic container)
+    if (method_exists($element, 'getElements')) {
+        $text = '';
+        try {
+            foreach ($element->getElements() as $child) {
+                $text .= $this->extractElementText($child);
+            }
+        } catch (\Exception $e) {
+            // Skip
+        }
+        return $text;
+    }
+    
+    return '';
+}
+
+/**
+ * ✅ Extract data from a table
+ */
+protected function extractTableData($table)
+{
+    $data = [];
+    $headers = [];
+    $rowIndex = 0;
+    
+    foreach ($table->getRows() as $row) {
+        $cells = $row->getCells();
+        $rowData = [];
+        
+        foreach ($cells as $cellIndex => $cell) {
+            $cellText = '';
+            foreach ($cell->getElements() as $element) {
+                if (method_exists($element, 'getText')) {
+                    $cellText .= $element->getText() . ' ';
+                }
+            }
+            $cellText = trim($cellText);
+            $rowData[] = $cellText;
+        }
+        
+        if ($rowIndex === 0) {
+            // First row as headers
+            $headers = $rowData;
+        } else {
+            // Data rows
+            $rowDataAssoc = [];
+            foreach ($headers as $index => $header) {
+                $key = strtolower(trim($header));
+                $value = $rowData[$index] ?? '';
+                $rowDataAssoc[$key] = trim($value);
+            }
+            
+            // Check if this row has meaningful data
+            $hasData = false;
+            foreach ($rowDataAssoc as $value) {
+                if (!empty($value) && $value !== '-') {
+                    $hasData = true;
+                    break;
+                }
+            }
+            
+            if ($hasData) {
+                $data[] = $rowDataAssoc;
+            }
+        }
+        
+        $rowIndex++;
+    }
+    
+    return $data;
+}
+
+/**
+ * ✅ Convert table to text for fallback
+ */
+protected function tableToText($tableData)
+{
+    $text = '';
+    foreach ($tableData as $row) {
+        $text .= implode(' ', $row) . ' ';
+    }
+    return $text;
+}
+
+protected function extractMalaysiaTCData($docxContent, $folderName, $invoiceNumber)
+{
+    $text = $docxContent['text'] ?? '';
+    
+    // ✅ Try OpenAI first
+    try {
+        $openAI = app(\App\Services\OpenAIService::class);
+        $result = $openAI->extractMalaysiaTCData($text, $invoiceNumber, $folderName);
+        
+        if ($result['success'] && !empty($result['data'])) {
+            $data = $result['data'];
+            
+            // ✅ Ensure currency is MYR for Malaysia
+            if (empty($data['currency'])) {
+                $data['currency'] = 'MYR';
+            }
+            if ($data['currency'] == 'RM') {
+                $data['currency'] = 'MYR';
+            }
+            
+            Log::info("✅ OpenAI Malaysia extraction successful for: {$invoiceNumber}");
+            Log::info("📊 Extracted: " . json_encode($data));
+            return $data;
+        }
+    } catch (\Exception $e) {
+        Log::error("OpenAI extraction failed: " . $e->getMessage());
+    }
+    
+    // ✅ Fallback: Regex (as backup)
+    Log::warning("⚠️ OpenAI failed, using regex fallback for: {$invoiceNumber}");
+    return $this->extractMalaysiaTCDataRegex($docxContent, $folderName, $invoiceNumber);
+}
+/**
+ * ✅ Detect currency from text
+ */
+protected function detectCurrency($text)
+{
+    if (stripos($text, 'RM') !== false || stripos($text, 'MYR') !== false) {
+        return 'MYR';
+    }
+    if (stripos($text, 'SGD') !== false || stripos($text, 'S$') !== false) {
+        return 'SGD';
+    }
+    if (stripos($text, 'USD') !== false || stripos($text, '$') !== false) {
+        return 'USD';
+    }
+    return 'MYR'; // Default for Malaysia
+}
+
+/**
+ * ✅ Clean date string to Y-m-d format
+ */
+protected function cleanDate($dateStr)
+{
+    if (empty($dateStr)) return null;
+    
+    // Remove extra spaces
+    $dateStr = trim($dateStr);
+    
+    // Try multiple formats
+    $formats = [
+        'Y-m-d',
+        'd-m-Y',
+        'd/m/Y',
+        'Y/m/d',
+        'd M Y',
+        'M d, Y',
+        'd-M-Y',
+        'd/M/Y',
+        'Y-M-d',
+        'Y/M/d',
+        'm/d/Y',
+        'd/m/Y',
+    ];
+    
+    foreach ($formats as $format) {
+        $date = \DateTime::createFromFormat($format, $dateStr);
+        if ($date) {
+            return $date->format('Y-m-d');
+        }
+    }
+    
+    // Try strtotime as fallback
+    $timestamp = strtotime($dateStr);
+    if ($timestamp) {
+        return date('Y-m-d', $timestamp);
+    }
+    
+    return null;
+}
+
+/**
+ * ✅ Extract from text labels
+ */
+protected function extractFromLabels($text, &$data)
+{
+    // Tour Ref - only if not already found
+    if (empty($data['tour_ref'])) {
+        if (preg_match('/Tour\s+Ref\s*[:|\s]+([A-Z0-9]{5,})/i', $text, $match)) {
+            $data['tour_ref'] = trim($match[1]);
+        }
+    }
+    
+    // Agent
+    if (empty($data['agent_name'])) {
+        if (preg_match('/Agent\s*[:|\s]+([^\n]+)/i', $text, $match)) {
+            $agent = trim($match[1]);
+            if (!preg_match('/name\s+revised/i', $agent) && strlen($agent) < 50) {
+                $data['agent_name'] = $agent;
+            }
+        }
+    }
+    
+    // Guest Name
+    if (empty($data['guest_name'])) {
+        if (preg_match('/Guests?\s+Name\s*[:|\s]+([^\n]+)/i', $text, $match)) {
+            $data['guest_name'] = trim($match[1]);
+        }
+    }
+    
+    // Guest Count
+    if (empty($data['guest_count'])) {
+        if (preg_match('/No\.?\s*of\s*Guests?\s*[:|\s]+(\d+)\s*Adults?/i', $text, $match)) {
+            $data['guest_count'] = intval($match[1]);
+        } elseif (preg_match('/(\d+)\s*Adults?/i', $text, $match)) {
+            $data['guest_count'] = intval($match[1]);
+        }
+    }
+    
+    // Meal Plan
+    if (empty($data['meal_plan'])) {
+        if (preg_match('/Meal\s+Plan\s*[:|\s]+([^\n]+)/i', $text, $match)) {
+            $meal = trim($match[1]);
+            if (strlen($meal) < 20) {
+                $data['meal_plan'] = $meal;
+            }
+        }
+    }
+    
+    // File Handler
+    if (empty($data['file_handler'])) {
+        if (preg_match('/File\s+Handler\s*[:|\s]+([^\n]+)/i', $text, $match)) {
+            $data['file_handler'] = trim($match[1]);
+        }
+    }
+    
+    // Flight
+    if (empty($data['flight'])) {
+        if (preg_match('/Flight\s*[:|\s]+([^\n]+)/i', $text, $match)) {
+            $data['flight'] = trim($match[1]);
+        }
+    }
+    
+    // Chauffeur Contact
+    if (empty($data['chauffeur_contact'])) {
+        if (preg_match('/Chauffeur\s+contact\s*[:|\s]+([^\n]+)/i', $text, $match)) {
+            $data['chauffeur_contact'] = trim($match[1]);
+        }
+    }
+    
+    // Arrival Date - only if not already found
+    if (empty($data['arrival_date'])) {
+        if (preg_match('/Arrival\s*Date\s*[:|\s]+(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/i', $text, $match)) {
+            $data['arrival_date'] = sprintf("%04d-%02d-%02d", $match[1], $match[2], $match[3]);
+        } elseif (preg_match('/Arrival\s*Date\s*[:|\s]+(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/i', $text, $match)) {
+            $data['arrival_date'] = sprintf("%04d-%02d-%02d", $match[3], $match[1], $match[2]);
+        }
+    }
+    
+    // Departure Date - only if not already found
+    if (empty($data['departure_date'])) {
+        if (preg_match('/Departure\s*Date\s*[:|\s]+(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/i', $text, $match)) {
+            $data['departure_date'] = sprintf("%04d-%02d-%02d", $match[1], $match[2], $match[3]);
+        } elseif (preg_match('/Departure\s*Date\s*[:|\s]+(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/i', $text, $match)) {
+            $data['departure_date'] = sprintf("%04d-%02d-%02d", $match[3], $match[1], $match[2]);
+        }
+    }
+    
+    // Emergency Contacts
+    if (empty($data['emergency_contacts'])) {
+        if (preg_match_all('/([A-Za-z\s]+)\s*\(([+\d\s]+)\)/', $text, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $data['emergency_contacts'][] = [
+                    'name' => trim($match[1]),
+                    'phone' => trim($match[2])
+                ];
+            }
+        }
+    }
+}
+
+/**
+ * ✅ Fallback regex extraction
+ */
+protected function extractWithFallbackRegex($text, &$data)
+{
+    // Tour Ref - if still null
+    if (empty($data['tour_ref'])) {
+        if (preg_match('/([A-Z]{0,2}\d{5,})/', $text, $match)) {
+            $data['tour_ref'] = $match[1];
+        }
+    }
+    
+    // Agent - if still null
+    if (empty($data['agent_name'])) {
+        if (preg_match('/\b(FIT|GLOBAL\s*JOURNEYS|MAKEMYTRIP|HOLIDAYS|TRAVEL|TOURS)\b/i', $text, $match)) {
+            $data['agent_name'] = strtoupper($match[1]);
+        }
+    }
+    
+    // City - if still null
+    if (empty($data['city'])) {
+        if (preg_match('/(Kuala\s*Lumpur|KualaLumpur|Penang|Johor|Lang|Malacca|Cameron)/i', $text, $match)) {
+            $data['city'] = $match[1];
+        }
+    }
+    
+    // Hotel - if still null
+    if (empty($data['hotel_name'])) {
+        if (preg_match('/Own\s+Arrangement/i', $text)) {
+            $data['hotel_name'] = 'Own Arrangement';
+        } elseif (preg_match('/Hotel\s*[:|\s]+([^\n]+)/i', $text, $match)) {
+            $data['hotel_name'] = trim($match[1]);
+        }
+    }
+    
+    // Nights - if still null
+    if (empty($data['nights'])) {
+        if (preg_match('/(\d+)\s*Nights?/i', $text, $match)) {
+            $data['nights'] = intval($match[1]);
+        } elseif (preg_match('/\b(\d{1,2})\s*days?/i', $text, $match)) {
+            $nights = intval($match[1]) - 1;
+            if ($nights > 0 && $nights < 31) {
+                $data['nights'] = $nights;
+            }
+        }
+    }
+}
+
+/**
+ * ✅ Format dates
+ */
+protected function formatDates(&$data)
+{
+    // If no departure date but we have arrival date and nights
+    if ($data['arrival_date'] && empty($data['departure_date']) && $data['nights']) {
+        $data['departure_date'] = date('Y-m-d', strtotime($data['arrival_date'] . ' + ' . $data['nights'] . ' days'));
+        Log::info("✅ Calculated DEPARTURE DATE from arrival + nights: {$data['departure_date']}");
+    }
+    
+    // If no arrival date but we have date folder
+    if (empty($data['arrival_date'])) {
+        $dateFolder = $this->dateFolder ?? null;
+        if ($dateFolder && preg_match('/^(\d{2})\s+([A-Za-z]+)$/', $dateFolder, $match)) {
+            $day = intval($match[1]);
+            $month = $this->getMonthNumber($match[2]);
+            $year = date('Y');
+            if ($month) {
+                $data['arrival_date'] = sprintf("%04d-%02d-%02d", $year, $month, $day);
+                Log::info("✅ Set ARRIVAL DATE from folder: {$data['arrival_date']}");
+            }
+        }
+    }
+}
+
+/**
+ * ✅ Get month number
+ */
+protected function getMonthNumber($monthName)
+{
+    $months = [
+        'jan' => 1, 'january' => 1,
+        'feb' => 2, 'february' => 2,
+        'mar' => 3, 'march' => 3,
+        'apr' => 4, 'april' => 4,
+        'may' => 5,
+        'jun' => 6, 'june' => 6,
+        'jul' => 7, 'july' => 7,
+        'aug' => 8, 'august' => 8,
+        'sep' => 9, 'september' => 9,
+        'oct' => 10, 'october' => 10,
+        'nov' => 11, 'november' => 11,
+        'dec' => 12, 'december' => 12,
+    ];
+    
+    $monthName = strtolower(trim($monthName));
+    return $months[$monthName] ?? null;
+}
+
+
+/**
+ * ✅ Extract from tables
+ */
+protected function extractFromTables($tables, &$data)
+{
+    foreach ($tables as $tableData) {
+        foreach ($tableData as $row) {
+            // Look for hotel/city/nights pattern
+            if (isset($row['city']) || isset($row['hotel']) || isset($row['nights'])) {
+                if (!empty($row['city'])) {
+                    $data['city'] = $row['city'];
+                }
+                if (!empty($row['hotel'])) {
+                    $data['hotel_name'] = $row['hotel'];
+                }
+                if (!empty($row['nights'])) {
+                    $data['nights'] = intval($row['nights']);
+                }
+                if (!empty($row['room type'])) {
+                    $data['room_type'] = $row['room type'];
+                }
+                if (!empty($row['meal type'])) {
+                    $data['meal_plan'] = $row['meal type'];
+                }
+                // If we found table data, break
+                break 2;
+            }
+            
+            // Also check for "Own Arrangement" in any column
+            foreach ($row as $key => $value) {
+                if (stripos($value, 'Own Arrangement') !== false) {
+                    $data['hotel_name'] = 'Own Arrangement';
+                    // Try to find city from other columns
+                    foreach ($row as $k => $v) {
+                        if (!empty($v) && stripos($v, 'Own Arrangement') === false && 
+                            (stripos($v, 'Kuala') !== false || stripos($v, 'Lumpur') !== false)) {
+                            $data['city'] = $v;
+                        }
+                        if (!empty($v) && is_numeric($v) && intval($v) > 0 && intval($v) < 31) {
+                            $data['nights'] = intval($v);
+                        }
+                    }
+                    break 2;
+                }
+            }
+        }
+    }
+}
+
 
 
 protected function extractWithOpenAI($content, $folderName, $invoiceNumber)
 {
     try {
         $openAI = app(\App\Services\OpenAIService::class);
+         $isLK = false;
+        if (stripos($content, 'Tour Ref') !== false && 
+            (stripos($content, 'IS') !== false || 
+             stripos($content, 'Pick Your Trails') !== false ||
+             stripos($content, 'SL Share Drive') !== false)) {
+            $isLK = true;
+        }
+          $totalResult = $openAI->extractTotalTourCostOnly($content);
+        $totalAmount = null;
+        $currency = 'USD';
+         if ($totalResult['success'] && isset($totalResult['data']['total_amount'])) {
+            $totalAmount = $totalResult['data']['total_amount'];
+            $currency = $totalResult['data']['currency'] ?? 'USD';
+            Log::info("💰 OpenAI extracted total_amount: {$totalAmount} {$currency}");
+        }
         
-        // Try OpenAI first
-        $result = $openAI->extractTCData($content, $invoiceNumber, $folderName);
+        // ✅ For LK, use specific extraction
+        if ($isLK) {
+            Log::info("🔍 Detected Sri Lanka format for: {$invoiceNumber}");
+            $result = $openAI->extractLKTCData($content, $invoiceNumber, $folderName);
+            
+            if ($result['success'] && !empty($result['data'])) {
+                $data = $result['data'];
+                // ✅ OVERRIDE total_amount with OpenAI result
+                if ($totalAmount !== null) {
+                    $data['total_amount'] = $totalAmount;
+                    $data['currency'] = $currency;
+                }
+                $data['invoice_number'] = $invoiceNumber;
+                $data['folder_name'] = $folderName;
+                
+                Log::info("📊 LK Final extracted data: " . json_encode($data));
+                return $data;
+            }
+        }
+        // ✅ NEW: Use the full extraction method
+        $result = $openAI->extractTCDataFull($content, $invoiceNumber, $folderName);
         
         if ($result['success'] && !empty($result['data'])) {
             $data = $result['data'];
-            
-            // ✅ If OpenAI returns null for everything, try again with a different prompt
-            if (empty($data['tour_ref']) && empty($data['agent_name']) && empty($data['arrival_date'])) {
-                Log::warning("⚠️ OpenAI returned empty, trying again with more explicit prompt...");
-                
-                // Try a second time with more explicit instruction
-                $result2 = $openAI->extractTCDataWithMoreContext($content, $invoiceNumber, $folderName);
-                if ($result2['success'] && !empty($result2['data'])) {
-                    $data = $result2['data'];
-                }
+            // ✅ OVERRIDE total_amount with OpenAI result
+            if ($totalAmount !== null) {
+                $data['total_amount'] = $totalAmount;
+                $data['currency'] = $currency;
             }
-            
-            // ✅ Always set these
             $data['invoice_number'] = $invoiceNumber;
             $data['folder_name'] = $folderName;
             
@@ -786,21 +1923,106 @@ protected function extractWithOpenAI($content, $folderName, $invoiceNumber)
             return $data;
         }
         
-        Log::warning("⚠️ OpenAI extraction failed for: {$invoiceNumber}");
+        Log::warning("⚠️ OpenAI full extraction failed for: {$invoiceNumber}, trying basic...");
+        
+        // ✅ Fallback: Try basic extraction
+        $result2 = $openAI->extractTCData($content, $invoiceNumber, $folderName);
+        if ($result2['success'] && !empty($result2['data'])) {
+            $data = $result2['data'];
+            $data['invoice_number'] = $invoiceNumber;
+            $data['folder_name'] = $folderName;
+            return $data;
+        }
         
     } catch (\Exception $e) {
         Log::error("OpenAI extraction failed: " . $e->getMessage());
     }
     
-    // ✅ Return with null values but keep invoice number
+    // ✅ Final fallback: Regex
     return [
         'tour_ref' => null,
         'agent_name' => null,
         'arrival_date' => null,
         'departure_date' => null,
+        'total_amount' => $this->extractTotalAmountFromText($content),
+        'currency' => $this->extractCurrencyFromText($content),
         'invoice_number' => $invoiceNumber,
-        'folder_name' => $folderName
+        'folder_name' => $folderName,
+        'hotels' => [],
+        'transport_items' => [],
+        'meal_items' => [],
     ];
+}
+
+/**
+ * ✅ Extract total amount using regex - SEARCH BOTH TEXT AND TABLES
+ */
+protected function extractTotalAmountFromText($text)
+{
+    // Pattern 1: "Total Tour Cost $ 900.00" (with space after $)
+    if (preg_match('/Total\s+Tour\s+Cost\s*[:]?\s*\$?\s*([0-9,]+\.\d{2})/i', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    
+    // Pattern 2: "$ 900.00" standalone
+    if (preg_match('/\$\s*([0-9,]+\.\d{2})/', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    
+    // Pattern 3: "Total Tour Cost $1,041.12"
+    if (preg_match('/Total\s+Tour\s+Cost\s*[:]?\s*\$([0-9,]+\.\d{2})/i', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    
+    // Pattern 4: Table format - Look for "Total Tour Cost" in table
+    // Example: "| Total Tour Cost | $ 900.00 |"
+    if (preg_match('/Total\s+Tour\s+Cost\s*\|\s*\$?\s*([0-9,]+\.\d{2})/i', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    
+    // Pattern 5: Table format with multiple columns
+    // Example: "| Total Tour Cost | $1,041.12 |"
+    if (preg_match('/Total\s+Tour\s+Cost\s*\|\s*\$?\s*([0-9,]+\.\d{2})\s*\|/i', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    
+    // Pattern 6: "$900.00" at the end
+    if (preg_match('/\$\s*([0-9,]+\.\d{2})\s*$/', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    
+    // Pattern 7: "900.00 USD"
+    if (preg_match('/([\d,]+\.\d{2})\s*(USD|MYR|SGD)/i', $text, $match)) {
+        return floatval(str_replace(',', '', $match[1]));
+    }
+    
+    return 0;
+}
+/**
+ * ✅ Extract currency using regex
+ */
+protected function extractCurrencyFromText($text)
+{
+    if (preg_match('/Total\s+Tour\s+Cost\s*[:]?\s*([$]?)\s*([\d,]+\.\d{2})\s*(USD|MYR|SGD)?/i', $text, $match)) {
+        if (!empty($match[3])) {
+            return strtoupper($match[3]);
+        }
+        if ($match[1] === '$') {
+            return 'USD';
+        }
+    }
+    
+    // Look for $ symbol
+    if (strpos($text, '$') !== false) {
+        return 'USD';
+    }
+    
+    // Look for MYR
+    if (stripos($text, 'MYR') !== false) {
+        return 'MYR';
+    }
+    
+    return 'USD'; // Default for LK
 }
 
 
@@ -894,151 +2116,1096 @@ protected function extractWithOpenAI($content, $folderName, $invoiceNumber)
         return $data;
     }
 
-    /**
-     * Create P&L Record
-     */
-    protected function createPnLRecord($data, $import)
-    {
-        try {
-            $record = PnlRecord::create([
-                'invoice_number' => $import->invoice_number,
-                'tour_ref' => $data['tour_ref'] ?? 'NA',
-                'agent_name' => $data['agent_name'] ?? null,
-                'guest_name' => $data['guest_name'] ?? null,
-                'vendor_name' => $data['agent_name'] ?? null,
-                'travel_start_date' => $this->normalizeDate($data['travel_start_date'] ?? null),
-                'travel_end_date' => $this->normalizeDate($data['travel_end_date'] ?? null),
-                'total_amount' => $data['total_amount'] ?? 0,
-                'currency' => $data['currency'] ?? 'MYR',
-                'pax_count' => $data['pax_count'] ?? 1,
-                'file_handler' => $data['file_handler'] ?? null,
-                'sales_person' => $data['sales_person'] ?? null,
-                'country_code' => $import->country_code,
-                'category' => 'Tour Package',
-                'status' => 'pending',
-                'processing_status' => 'processing',
-                'source' => 'onedrive',
-                'folder_name' => $import->folder_name,
-                'hotel_name' => $data['hotel_name'] ?? null,
-                'meal_plan' => $data['meal_plan'] ?? null,
-                'nights' => $data['nights'] ?? null,
-                'staging_import_id' => $import->id,
-            ]);
-            
-            Log::info("✅ Created P&L record: {$import->invoice_number} (ID: {$record->id})");
-            return $record;
-            
-        } catch (\Exception $e) {
-            Log::error("Failed to create P&L record: " . $e->getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * Create P&L Items
-     */
-    protected function createPnLItems($data, $record)
-    {
-        try {
-            if (!empty($data['hotel_name'])) {
-                PnlItem::create([
-                    'pnl_record_id' => $record->id,
-                    'type' => 'HOTEL',
-                    'service_name' => $data['hotel_name'],
-                    'amount_original' => $record->total_amount,
-                    'currency' => $record->currency,
-                    'start_date' => $record->travel_start_date,
-                    'end_date' => $record->travel_end_date,
-                    'nights' => $data['nights'] ?? null,
-                    'item_details' => json_encode([
-                        'meal_plan' => $data['meal_plan'] ?? null,
-                        'room_type' => $data['room_type'] ?? null,
-                        'pax' => $record->pax_count,
-                    ])
-                ]);
-            }
-            
-            Log::info("✅ Created P&L items for record: {$record->id}");
-            
-        } catch (\Exception $e) {
-            Log::error("Failed to create P&L items: " . $e->getMessage());
-        }
-    }
-
-    /**
-     * Normalize date format
-     */
-    protected function normalizeDate($date)
-    {
-        if (!$date) return null;
+protected function createPnLRecord($data, $import)
+{
+    try {
+        // ✅ Get total_amount from extracted data
+        $totalAmount = $data['total_amount'] ?? 0;
         
-        try {
-            if (strpos($date, '/') !== false) {
-                $date = str_replace('/', '-', $date);
+        // ✅ If still 0, try to get from import
+        if ($totalAmount == 0 && $import->total_amount) {
+            $totalAmount = $import->total_amount;
+        }
+        
+        // ✅ If still 0, try to extract from TC content
+        if ($totalAmount == 0) {
+            $tcContent = $import->tc_file_content ?? '';
+            $totalAmount = $this->extractTotalAmountFromText($tcContent);
+        }
+        
+        $currency = $data['currency'] ?? 'USD';
+        if ($import->country_code == 'MY' && $currency == 'USD') {
+            // Check if there's MYR in the content
+            $tcContent = $import->tc_file_content ?? '';
+            if (stripos($tcContent, 'RM') !== false || stripos($tcContent, 'MYR') !== false) {
+                $currency = 'MYR';
+                Log::info("💰 Currency corrected to MYR for Malaysia");
             }
-            return date('Y-m-d', strtotime($date));
-        } catch (\Exception $e) {
-            return $date;
+        }
+          if ($import->country_code == 'LK') {
+            $currency = 'USD';
+        }
+        
+        // For Vietnam, always USD
+        if ($import->country_code == 'VN') {
+            $currency = 'USD';
+        }
+        Log::info("💰 Final Total Amount for {$import->invoice_number}: {$totalAmount}");
+        
+        // ✅ Get the TC content for category detection
+        $tcContent = $import->tc_file_content ?? '';
+        
+        // ✅ Build categories from the actual content
+        $categories = [];
+        
+        // ✅ Check for Hotels/Cruises in content
+        if (stripos($tcContent, 'Hotels/Cruises') !== false || 
+            stripos($tcContent, 'Hotels') !== false) {
+            $categories[] = 'Hotels/Cruises';
+        }
+        
+        // ✅ Check for Transport
+        if (stripos($tcContent, 'Transport') !== false) {
+            $categories[] = 'Transport';
+        }
+        
+        // ✅ Check for Attraction
+        if (stripos($tcContent, 'Attraction') !== false) {
+            $categories[] = 'Attraction';
+        }
+        
+        // ✅ Check for Tour Transfers
+        if (stripos($tcContent, 'Tour Transfers') !== false) {
+            $categories[] = 'Tour Transfers';
+        }
+        
+        // ✅ Check for Meals
+        if (stripos($tcContent, 'Meals') !== false) {
+            $categories[] = 'Meals';
+        }
+        
+        // ✅ Check for Other Rates
+        if (stripos($tcContent, 'Other Rates') !== false) {
+            $categories[] = 'Other Rates';
+        }
+        
+        // ✅ If no categories found, default to 'Tour Package'
+        if (empty($categories)) {
+            $categories[] = 'Tour Package';
+        }
+        
+        // ✅ Convert to string for 'category' field
+        $categoryString = implode(', ', $categories);
+        
+        Log::info("📊 Detected Categories from content: " . json_encode($categories));
+        Log::info("📊 Category String: " . $categoryString);
+         $salesPerson = $data['sales_person'] ?? null;
+        $guestId = $data['guest_id'] ?? null;
+        
+        // ✅ If sales person not extracted, try from folder name
+        if (!$salesPerson) {
+            $salesPerson = $this->extractFileHandlerFromFolderName($import->folder_name);
+        }
+        
+        // ✅ If guest ID not extracted, try from content
+        if (!$guestId) {
+            $openAI = app(\App\Services\OpenAIService::class);
+            $guestId = $openAI->extractGuestIdFromText($tcContent);
+        }
+        $record = PnlRecord::create([
+            'invoice_number' => $import->invoice_number,
+            'tour_ref' => $data['tour_ref'] ?? 'NA',
+            'agent_name' => $data['agent_name'] ?? null,
+            'guest_name' => $data['guest_name'] ?? null,
+            'vendor_name' => $data['agent_name'] ?? null,
+            'travel_start_date' => $this->normalizeDate($data['arrival_date'] ?? null),
+            'travel_end_date' => $this->normalizeDate($data['departure_date'] ?? null),
+            
+            'amount' => $totalAmount,
+            'currency' => $currency,
+            'pax_count' => $data['guest_count'] ?? 1,
+            'file_handler' => $data['file_handler'] ?? null,
+            'sales_person' => $data['sales_person'] ?? null,
+            'country_code' => $import->country_code,
+            
+            // ✅✅✅ FIX: Store both formats with detected categories
+            'category' => $categoryString,        // String format
+            'categories' => $categories,          // JSON array format
+            
+            'status' => 'pending',
+            'processing_status' => 'processing',
+            'source' => 'onedrive',
+            'folder_name' => $import->folder_name,
+            'hotel_name' => $data['hotel_name'] ?? null,
+            'meal_plan' => $data['meal_plan'] ?? null,
+            'nights' => $data['nights'] ?? null,
+            'staging_import_id' => $import->id,
+            
+            'message_id' => 'ONEDRIVE_' . $import->id . '_' . time(),
+            'subject' => $import->folder_name,
+            'body' => $tcContent,
+            'body_hash' => md5($tcContent),
+            'received_at' => now(),
+            'from_email' => 'onedrive@aahaas.com',
+            'from_name' => 'OneDrive Import',
+            'read_status' => 'read',
+            'is_tour_confirmation' => true,
+            'has_attachments' => false,
+        ]);
+        
+        Log::info("✅ Created P&L record: {$import->invoice_number} (ID: {$record->id})");
+        Log::info("💰 Amount: {$totalAmount}, Categories: " . json_encode($categories));
+        return $record;
+        
+    } catch (\Exception $e) {
+        Log::error("Failed to create P&L record: " . $e->getMessage());
+        return null;
+    }
+}
+/**
+ * Create P&L Items - DIRECT PARSING FROM TC CONTENT
+ */
+protected function createPnLItems($data, $record)
+{
+    try {
+        
+       if ($record->country_code === 'LK') {
+            // ✅ Use the SriLankaPnLParser for LK TC/P&L files
+            $lkParser = new \App\Services\SriLankaPnLParser();
+            
+            // Get the TC content from the import
+            $import = \App\Models\OneDriveImport::find($record->staging_import_id);
+            if ($import && $import->tc_file_content) {
+                $record->body = $import->tc_file_content; // Set body for parser
+            }
+            
+            $lkParser->parseAndSaveItems($record);
+            Log::info("✅ LK P&L items parsed and saved for record: {$record->id}");
+            return;
+        }
+        $itemsCreated = 0;
+        
+        // Get the full TC content from the import record
+        $import = \App\Models\OneDriveImport::find($record->staging_import_id);
+        if (!$import) {
+            Log::warning("⚠️ No import record found for P&L items: {$record->id}");
+            return;
+        }
+        
+        $tcContent = $import->tc_file_content;
+        $totalAmount = $record->total_amount ?? 0;
+        $currency = $record->currency ?? 'MYR';
+        
+        Log::info("📄 Creating P&L items for: {$record->invoice_number}");
+        Log::info("📄 TC Content length: " . strlen($tcContent));
+        
+        // ✅ 1. Create HOTEL item (if hotel_name exists and is valid)
+        if (!empty($data['hotel_name']) && !is_numeric($data['hotel_name']) && $data['hotel_name'] !== '4' && $data['hotel_name'] !== '3' && $data['hotel_name'] !== '2' && $data['hotel_name'] !== '1') {
+            PnlItem::create([
+                'pnl_record_id' => $record->id,
+                'type' => 'HOTEL',
+                'service_name' => $data['hotel_name'],
+                'amount_original' => $totalAmount,
+                'currency' => $currency,
+                'start_date' => $record->travel_start_date,
+                'end_date' => $record->travel_end_date,
+                'nights' => $data['nights'] ?? null,
+                'item_details' => json_encode([
+                    'meal_plan' => $data['meal_plan'] ?? null,
+                    'room_type' => $data['room_type'] ?? null,
+                    'pax' => $record->pax_count,
+                ])
+            ]);
+            $itemsCreated++;
+            Log::info("✅ Created HOTEL item: {$data['hotel_name']}");
+        }
+        
+        // ✅ 2. Parse Transport items from TC content
+        if (preg_match('/Transport(.*?)(?:Attraction|Tour Transfers|Meals|Other Rates|$)/is', $tcContent, $sectionMatch)) {
+            $section = $sectionMatch[1];
+            $lines = explode("\n", $section);
+            
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (empty($line)) continue;
+                
+                // Skip headers and totals
+                if (preg_match('/EXPENSE|DISTANCE|DAYS|RATE|TOTAL|Total Transport|Meal Transport/i', $line)) continue;
+                
+                // Pattern: "Transport (PVT)Kuala Lumpur International Airport - Kuala Lumpur 90.00"
+                if (preg_match('/^([A-Za-z\s\(\)\-]+?)\s+([\d,]+\.\d{2})$/', $line, $match)) {
+                    $serviceName = trim($match[1]);
+                    $amount = floatval(str_replace(',', '', $match[2]));
+                    
+                    if ($amount > 0 && !empty($serviceName) && !preg_match('/Total|TOTAL/i', $serviceName)) {
+                        PnlItem::create([
+                            'pnl_record_id' => $record->id,
+                            'type' => 'TRANSPORT',
+                            'service_name' => $serviceName,
+                            'amount_original' => $amount,
+                            'currency' => $currency,
+                            'start_date' => $record->travel_start_date,
+                            'end_date' => $record->travel_end_date,
+                            'item_details' => json_encode(['remarks' => $serviceName])
+                        ]);
+                        $itemsCreated++;
+                        Log::info("✅ Created TRANSPORT item: {$serviceName} - {$amount}");
+                    }
+                }
+                // Pattern with pipe: | Transport ... | 90.00 |
+                elseif (preg_match('/\|\s*([^|]+?)\s*\|\s*([\d,]+\.\d{2})\s*\|/', $line, $match)) {
+                    $serviceName = trim($match[1]);
+                    $amount = floatval(str_replace(',', '', $match[2]));
+                    
+                    if ($amount > 0 && !empty($serviceName) && !preg_match('/Total|TOTAL/i', $serviceName)) {
+                        PnlItem::create([
+                            'pnl_record_id' => $record->id,
+                            'type' => 'TRANSPORT',
+                            'service_name' => $serviceName,
+                            'amount_original' => $amount,
+                            'currency' => $currency,
+                            'start_date' => $record->travel_start_date,
+                            'end_date' => $record->travel_end_date,
+                            'item_details' => json_encode(['remarks' => $serviceName])
+                        ]);
+                        $itemsCreated++;
+                        Log::info("✅ Created TRANSPORT item: {$serviceName} - {$amount}");
+                    }
+                }
+            }
+        }
+        
+        // ✅ 3. Parse Attraction items from TC content
+        if (preg_match('/Attraction(.*?)(?:Tour Transfers|Meals|Other Rates|$)/is', $tcContent, $sectionMatch)) {
+            $section = $sectionMatch[1];
+            $lines = explode("\n", $section);
+            
+            $adultCount = $data['guest_count'] ?? 1;
+            
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (empty($line)) continue;
+                
+                // Skip headers and totals
+                if (preg_match('/#Day|City|Attraction|Adult|Child|Total|DAY/i', $line)) continue;
+                
+                // Pattern: "Day 1 Kuala Lumpur Putrajaya Sightseeing Joy Cruiser Ticket only 30"
+                if (preg_match('/Day\s*\d+\s+([A-Za-z\s]+)\s+([A-Za-z\s]+?)\s+(\d+)$/i', $line, $match)) {
+                    $city = trim($match[1]);
+                    $attraction = trim($match[2]);
+                    $rate = floatval($match[3]);
+                    $amount = $rate * $adultCount;
+                    
+                    if ($amount > 0) {
+                        PnlItem::create([
+                            'pnl_record_id' => $record->id,
+                            'type' => 'ATTRACTION',
+                            'service_name' => $attraction,
+                            'amount_original' => $amount,
+                            'currency' => $currency,
+                            'start_date' => $record->travel_start_date,
+                            'end_date' => $record->travel_end_date,
+                            'item_details' => json_encode([
+                                'remarks' => "{$city} - {$attraction}",
+                                'rate' => $rate,
+                                'pax' => $adultCount
+                            ])
+                        ]);
+                        $itemsCreated++;
+                        Log::info("✅ Created ATTRACTION item: {$attraction} - {$amount}");
+                    }
+                }
+            }
+        }
+        
+        // ✅ 4. Parse Tour Transfer items from TC content
+        if (preg_match('/Tour Transfers(.*?)(?:Attraction|Meals|Other Rates|$)/is', $tcContent, $sectionMatch)) {
+            $section = $sectionMatch[1];
+            $lines = explode("\n", $section);
+            
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (empty($line)) continue;
+                
+                // Skip headers and totals
+                if (preg_match('/#Day|City|Attraction|Adult|Child|Transfer|Total/i', $line)) continue;
+                
+                // Pattern: "Day 1 Enroute Breakfast and Putrajaya Sightseeing Joy Cruiser Ticket 20"
+                if (preg_match('/Day\s*\d+\s+([A-Za-z\s]+?)\s+(\d+)$/i', $line, $match)) {
+                    $serviceName = trim($match[1]);
+                    $amount = floatval($match[2]);
+                    
+                    if ($amount > 0 && !empty($serviceName)) {
+                        PnlItem::create([
+                            'pnl_record_id' => $record->id,
+                            'type' => 'TOUR TRANSFER',
+                            'service_name' => $serviceName,
+                            'amount_original' => $amount,
+                            'currency' => $currency,
+                            'start_date' => $record->travel_start_date,
+                            'end_date' => $record->travel_end_date,
+                            'item_details' => json_encode(['remarks' => $serviceName])
+                        ]);
+                        $itemsCreated++;
+                        Log::info("✅ Created TOUR TRANSFER item: {$serviceName} - {$amount}");
+                    }
+                }
+            }
+        }
+        
+        // ✅ 5. Parse Meals items from TC content
+        if (preg_match('/Meals(.*?)(?:Transport|Other Rates|$)/is', $tcContent, $sectionMatch)) {
+            $section = $sectionMatch[1];
+            $lines = explode("\n", $section);
+            
+            $adultCount = $data['guest_count'] ?? 1;
+            
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if (empty($line)) continue;
+                
+                // Skip headers and totals
+                if (preg_match('/Pax|Rate|Total|Total Meal/i', $line)) continue;
+                
+                // Pattern: "Breakfast on arrival day (Putrajaya) 30"
+                if (preg_match('/^([A-Za-z\s\(\)]+?)\s+(\d+)$/i', $line, $match)) {
+                    $serviceName = trim($match[1]);
+                    $rate = floatval($match[2]);
+                    $amount = $rate * $adultCount;
+                    
+                    if ($amount > 0 && !empty($serviceName)) {
+                        PnlItem::create([
+                            'pnl_record_id' => $record->id,
+                            'type' => 'MEALS',
+                            'service_name' => $serviceName,
+                            'amount_original' => $amount,
+                            'currency' => $currency,
+                            'start_date' => $record->travel_start_date,
+                            'end_date' => $record->travel_end_date,
+                            'item_details' => json_encode(['remarks' => $serviceName, 'pax' => $adultCount])
+                        ]);
+                        $itemsCreated++;
+                        Log::info("✅ Created MEALS item: {$serviceName} - {$amount}");
+                    }
+                }
+            }
+        }
+        
+        Log::info("✅ Created {$itemsCreated} P&L items for record: {$record->id}");
+        
+    } catch (\Exception $e) {
+        Log::error("Failed to create P&L items: " . $e->getMessage());
+        Log::error($e->getTraceAsString());
+    }
+}
+
+/**
+ * ✅ Extract Transport items from TC data
+ */
+protected function extractTransportFromTC($data)
+{
+    $items = [];
+    $text = $data['tc_content'] ?? '';
+    
+    if (empty($text)) return $items;
+    
+    // Look for Transport section
+    if (preg_match('/Transport(.*?)(?:Attraction|Tour Transfers|Meals|Other Rates|$)/is', $text, $sectionMatch)) {
+        $section = $sectionMatch[1];
+        $lines = explode("\n", $section);
+        
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+            
+            // Skip headers and totals
+            if (preg_match('/EXPENSE|DISTANCE|DAYS|RATE|TOTAL|Total Transport/i', $line)) continue;
+            
+            // Pattern: "Transport (PVT)Kuala Lumpur International Airport - Kuala Lumpur 90.00"
+            if (preg_match('/^([A-Za-z\s\(\)\-]+?)\s+([\d,]+\.\d{2})$/', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $amount = floatval(str_replace(',', '', $match[2]));
+                
+                if ($amount > 0 && !empty($serviceName)) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => ['remarks' => $serviceName]
+                    ];
+                }
+            }
+            // Pattern: "| Transport (PVT)Kuala Lumpur International Airport - Kuala Lumpur | 90.00 |"
+            elseif (preg_match('/\|\s*([^|]+?)\s*\|\s*([\d,]+\.\d{2})\s*\|/', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $amount = floatval(str_replace(',', '', $match[2]));
+                
+                if ($amount > 0 && !empty($serviceName) && 
+                    !preg_match('/Total|TOTAL/i', $serviceName)) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => ['remarks' => $serviceName]
+                    ];
+                }
+            }
         }
     }
+    
+    return $items;
+}
 
-    /**
-     * Get folder contents from OneDrive
-     */
-    public function getFolderContents($path)
-    {
-        try {
-            $encodedPath = str_replace(' ', '%20', $path);
-            $url = $this->baseUrl . "/users/{$this->userEmail}/drive/root:/{$encodedPath}:/children";
+/**
+ * ✅ Extract Attraction items from TC data
+ */
+protected function extractAttractionFromTC($data)
+{
+    $items = [];
+    $text = $data['tc_content'] ?? '';
+    
+    if (empty($text)) return $items;
+    
+    // Look for Attraction section
+    if (preg_match('/Attraction(.*?)(?:Tour Transfers|Meals|Other Rates|$)/is', $text, $sectionMatch)) {
+        $section = $sectionMatch[1];
+        $lines = explode("\n", $section);
+        
+        // Get adult count from data
+        $adultCount = $data['guest_count'] ?? 2;
+        
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+            
+            // Skip headers and totals
+            if (preg_match('/#Day|City|Attraction|Adult|Child|Total/i', $line)) continue;
+            
+            // Pattern: "Day 1 Kuala Lumpur Putrajaya Sightseeing Joy Cruiser Ticket only 30"
+            if (preg_match('/Day\s*\d+\s+([A-Za-z\s]+)\s+([A-Za-z\s]+?)\s+(\d+)$/i', $line, $match)) {
+                $city = trim($match[1]);
+                $attraction = trim($match[2]);
+                $rate = floatval($match[3]);
+                $amount = $rate * $adultCount;
+                
+                if ($amount > 0) {
+                    $items[] = [
+                        'service_name' => $attraction,
+                        'amount' => $amount,
+                        'details' => [
+                            'remarks' => "{$city} - {$attraction}",
+                            'rate' => $rate,
+                            'pax' => $adultCount
+                        ]
+                    ];
+                }
+            }
+            // Pattern with pipe: | Day 1 | Kuala Lumpur | Putrajaya Sightseeing | 30 |
+            elseif (preg_match('/\|\s*Day\s*\d+\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([\d,]+\.?\d*)\s*\|/', $line, $match)) {
+                $city = trim($match[1]);
+                $attraction = trim($match[2]);
+                $rate = floatval(str_replace(',', '', $match[3]));
+                $amount = $rate * $adultCount;
+                
+                if ($amount > 0) {
+                    $items[] = [
+                        'service_name' => $attraction,
+                        'amount' => $amount,
+                        'details' => [
+                            'remarks' => "{$city} - {$attraction}",
+                            'rate' => $rate,
+                            'pax' => $adultCount
+                        ]
+                    ];
+                }
+            }
+        }
+    }
+    
+    return $items;
+}
+
+/**
+ * ✅ Extract Tour Transfer items from TC data
+ */
+protected function extractTourTransferFromTC($data)
+{
+    $items = [];
+    $text = $data['tc_content'] ?? '';
+    
+    if (empty($text)) return $items;
+    
+    // Look for Tour Transfers section
+    if (preg_match('/Tour Transfers(.*?)(?:Attraction|Meals|Other Rates|$)/is', $text, $sectionMatch)) {
+        $section = $sectionMatch[1];
+        $lines = explode("\n", $section);
+        
+        $adultCount = $data['guest_count'] ?? 2;
+        
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+            
+            // Skip headers and totals
+            if (preg_match('/#Day|City|Attraction|Adult|Child|Transfer|Total/i', $line)) continue;
+            
+            // Pattern: "Day 1 Enroute Breakfast and Putrajaya Sightseeing Joy Cruiser Ticket 20"
+            if (preg_match('/Day\s*\d+\s+([A-Za-z\s]+?)\s+(\d+)$/i', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $rate = floatval($match[2]);
+                $amount = $rate * $adultCount;
+                
+                if ($amount > 0) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => ['remarks' => $serviceName]
+                    ];
+                }
+            }
+        }
+    }
+    
+    return $items;
+}
+
+/**
+ * ✅ Extract Meals items from TC data
+ */
+protected function extractMealsFromTC($data)
+{
+    $items = [];
+    $text = $data['tc_content'] ?? '';
+    
+    if (empty($text)) return $items;
+    
+    // Look for Meals section
+    if (preg_match('/Meals(.*?)(?:Transport|Other Rates|$)/is', $text, $sectionMatch)) {
+        $section = $sectionMatch[1];
+        $lines = explode("\n", $section);
+        
+        $adultCount = $data['guest_count'] ?? 2;
+        
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+            
+            // Skip headers and totals
+            if (preg_match('/Pax|Rate|Total|Total Meal/i', $line)) continue;
+            
+            // Pattern: "Breakfast on arrival day (Putrajaya) 30"
+            if (preg_match('/^([A-Za-z\s\(\)]+?)\s+(\d+)$/i', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $rate = floatval($match[2]);
+                $amount = $rate * $adultCount;
+                
+                if ($amount > 0) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => ['remarks' => $serviceName]
+                    ];
+                }
+            }
+            // Pattern with pipe: | Breakfast on arrival day | 30 |
+            elseif (preg_match('/\|\s*([^|]+?)\s*\|\s*([\d,]+\.?\d*)\s*\|/', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $rate = floatval(str_replace(',', '', $match[2]));
+                $amount = $rate * $adultCount;
+                
+                if ($amount > 0 && !preg_match('/Total|TOTAL/i', $serviceName)) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => ['remarks' => $serviceName]
+                    ];
+                }
+            }
+        }
+    }
+    
+    return $items;
+}
+
+protected function normalizeDate($date)
+{
+    if (!$date) {
+        return null;
+    }
+    
+    // If it's already in Y-m-d format, return as is
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        return $date;
+    }
+    
+    try {
+        // Try to parse any date format
+        $timestamp = strtotime($date);
+        if ($timestamp && $timestamp > 0) {
+            return date('Y-m-d', $timestamp);
+        }
+        return null;
+    } catch (\Exception $e) {
+        Log::error("Date normalization failed: " . $e->getMessage());
+        return null;
+    }
+}
+public function getFolderContents($path)
+{
+    try {
+        // ✅ Clean the path - remove any leading/trailing slashes
+        $cleanPath = trim($path, '/');
+        $encodedPath = str_replace(' ', '%20', $cleanPath);
+        
+        // ✅ For Sri Lanka, use drive ID
+        if (strpos($cleanPath, 'SL Share Drive') !== false || 
+            strpos($cleanPath, 'SL Share Drive_') !== false) {
+            
+            Log::info("🔍 Using Drive ID for Sri Lanka: {$cleanPath}");
+            
+            $graphUrl = $this->baseUrl . "/drives/{$this->sriLankaDriveId}/root:/{$encodedPath}:/children";
+            Log::info("📡 Graph URL: {$graphUrl}");
             
             $response = Http::withToken($this->accessToken)
                 ->timeout(30)
-                ->get($url);
+                ->get($graphUrl);
             
             if ($response->ok()) {
                 $data = $response->json();
+                Log::info("✅ Found " . count($data['value'] ?? []) . " items");
                 return $data['value'] ?? [];
             }
             
-            Log::warning("Failed to get folder contents: {$path}", ['error' => $response->body()]);
-            return [];
+            Log::warning("⚠️ Drive API failed: " . $response->status());
+            Log::warning("Response: " . substr($response->body(), 0, 200));
             
-        } catch (\Exception $e) {
-            Log::error("Error getting folder contents: " . $e->getMessage());
+            // ✅ Fallback: Try without the drive ID (for debugging)
+            $fallbackUrl = $this->baseUrl . "/users/{$this->userEmail}/drive/root:/{$encodedPath}:/children";
+            Log::info("📡 Fallback URL: {$fallbackUrl}");
+            
+            $fallbackResponse = Http::withToken($this->accessToken)
+                ->timeout(30)
+                ->get($fallbackUrl);
+            
+            if ($fallbackResponse->ok()) {
+                Log::info("✅ Fallback API success!");
+                return $fallbackResponse->json()['value'] ?? [];
+            }
+            
             return [];
         }
+        
+        // ✅ Default: Try user drive
+        $url = $this->baseUrl . "/users/{$this->userEmail}/drive/root:/{$encodedPath}:/children";
+        
+        $response = Http::withToken($this->accessToken)
+            ->timeout(30)
+            ->get($url);
+        
+        if ($response->ok()) {
+            return $response->json()['value'] ?? [];
+        }
+        
+        Log::warning("⚠️ Failed to get folder contents: {$path}");
+        return [];
+        
+    } catch (\Exception $e) {
+        Log::error("Error getting folder contents: " . $e->getMessage());
+        return [];
     }
+}
 
-    /**
-     * Generate invoice from record
-     */
-    protected function generateInvoiceFromRecord($record)
-    {
-        try {
-            if ($record->invoice_number) {
-                $existing = \App\Models\GeneratedInvoice::where('invoice_number', $record->invoice_number)->first();
-                if ($existing) {
-                    Log::info("⏭️ Invoice already exists: {$record->invoice_number}");
-                    return;
-                }
-            }
-            
-            $email = \App\Models\IncomingEmail::where('invoice_number', $record->invoice_number)->first();
-            
-            if (!$email) {
-                Log::info("ℹ️ No email found for invoice: {$record->invoice_number}");
+  /**
+ * Generate invoice from record - UPDATED
+ */
+protected function generateInvoiceFromRecord($record)
+{
+    try {
+        if ($record->invoice_number) {
+            $existing = \App\Models\GeneratedInvoice::where('invoice_number', $record->invoice_number)->first();
+            if ($existing) {
+                Log::info("⏭️ Invoice already exists: {$record->invoice_number}");
                 return;
             }
-            
+        }
+        
+        // ✅ FIRST: Try to find matching email
+        $email = \App\Models\IncomingEmail::where('invoice_number', $record->invoice_number)->first();
+        
+        if ($email) {
+            // ✅ Generate from email if found
             $invoiceService = app(\App\Services\InvoiceGenerationService::class);
             $invoice = $invoiceService->generateFromEmail($email);
             
             if ($invoice) {
-                Log::info("✅ Generated invoice: {$invoice->invoice_number} from OneDrive record");
+                Log::info("✅ Generated invoice from email: {$invoice->invoice_number}");
+                return;
             }
-            
-        } catch (\Exception $e) {
-            Log::error("Failed to generate invoice: " . $e->getMessage());
+        }
+        
+        // ✅ SECOND: Generate directly from PnL Record (NEW!)
+        Log::info("ℹ️ No email found, generating invoice directly from PnL record: {$record->invoice_number}");
+        
+        $invoice = $this->generateInvoiceFromPnLRecord($record);
+        
+        if ($invoice) {
+            Log::info("✅ Generated invoice from PnL record: {$invoice->invoice_number}");
+        }
+        
+    } catch (\Exception $e) {
+        Log::error("Failed to generate invoice: " . $e->getMessage());
+    }
+}
+
+/**
+ * ✅ NEW: Generate invoice directly from PnL Record
+ */
+protected function generateInvoiceFromPnLRecord($record)
+{
+    try {
+        // Get extracted data from staging import
+        $import = \App\Models\OneDriveImport::where('invoice_number', $record->invoice_number)
+            ->where('country_code', $record->country_code)
+            ->first();
+        
+        if (!$import) {
+            Log::warning("⚠️ No staging import found for: {$record->invoice_number}");
+            return null;
+        }
+        
+        $data = $import->extracted_data;
+        
+        // ✅ Build invoice data from PnL record
+        $invoiceData = [
+            'invoice_number' => $record->invoice_number,
+            'tour_ref' => $record->tour_ref ?? $data['tour_ref'] ?? 'NA',
+            'agent_name' => $record->agent_name ?? $data['agent_name'] ?? 'Unknown',
+            'guest_name' => $record->guest_name ?? $data['guest_name'] ?? 'N/A',
+            'travel_start_date' => $record->travel_start_date ?? $data['arrival_date'] ?? null,
+            'travel_end_date' => $record->travel_end_date ?? $data['departure_date'] ?? null,
+            'total_amount' => $record->total_amount ?? $data['total_amount'] ?? 0,
+            'currency' => $record->currency ?? $data['currency'] ?? 'MYR',
+            'pax_count' => $record->pax_count ?? $data['guest_count'] ?? 1,
+            'country_code' => $record->country_code,
+            'hotel_name' => $record->hotel_name ?? $data['hotel_name'] ?? null,
+            'meal_plan' => $record->meal_plan ?? $data['meal_plan'] ?? null,
+            'nights' => $record->nights ?? $data['nights'] ?? null,
+            'folder_name' => $record->folder_name ?? $import->folder_name,
+        ];
+        
+        Log::info("📝 Creating invoice from PnL record: " . json_encode($invoiceData));
+        
+        // ✅ Create invoice directly
+        $invoice = \App\Models\GeneratedInvoice::create([
+            'invoice_number' => $invoiceData['invoice_number'],
+            'tour_ref' => $invoiceData['tour_ref'],
+            'agent_name' => $invoiceData['agent_name'],
+            'guest_name' => $invoiceData['guest_name'],
+            'travel_start_date' => $invoiceData['travel_start_date'],
+            'travel_end_date' => $invoiceData['travel_end_date'],
+            'total_amount' => $invoiceData['total_amount'],
+            'currency' => $invoiceData['currency'],
+            'pax_count' => $invoiceData['pax_count'],
+            'country_code' => $invoiceData['country_code'],
+            'hotel_name' => $invoiceData['hotel_name'],
+            'meal_plan' => $invoiceData['meal_plan'],
+            'nights' => $invoiceData['nights'],
+            'folder_name' => $invoiceData['folder_name'],
+            'status' => 'pending',
+            'source' => 'onedrive',
+            'pnl_record_id' => $record->id,
+            'staging_import_id' => $import->id,
+              'email_id' => null,
+        ]);
+        
+        Log::info("✅ Created invoice: {$invoice->invoice_number} (ID: {$invoice->id})");
+        
+        // ✅ Send invoice email
+        // $this->sendInvoiceEmail($invoice);
+        
+        return $invoice;
+        
+    } catch (\Exception $e) {
+        Log::error("Failed to generate invoice from PnL record: " . $e->getMessage());
+        return null;
+    }
+}
+
+/**
+ * ✅ Send invoice email
+ */
+// protected function sendInvoiceEmail($invoice)
+// {
+//     try {
+//         $emailType = 'credit';
+        
+//         if ($invoice->is_revision) {
+//             $emailType = 'revision';
+//         } elseif ($invoice->invoice_type == 'non_credit') {
+//             $emailType = 'non_credit';
+//         }
+        
+//         // Send email
+//         \Illuminate\Support\Facades\Mail::to('kevinraj@aahaas.com')
+//             ->cc('raja.lakshmi@aahaas.com')
+//             ->send(new \App\Mail\InvoiceMail($invoice, $emailType));
+        
+//         Log::info("📧 Invoice email sent for: {$invoice->invoice_number}");
+        
+//     } catch (\Exception $e) {
+//         Log::error("❌ Failed to send invoice email: " . $e->getMessage());
+//     }
+// }
+
+/**
+ * Create P&L items for Sri Lanka format
+ */
+protected function createPnLItemsForLK($data, $record)
+{
+    // Use record's body instead of fetching import
+    $tcContent = $record->body ?? '';
+    $currency = $record->currency ?? 'USD';
+    $totalAmount = $record->amount ?? 0;
+
+    Log::info("📄 Creating LK P&L items for: {$record->invoice_number} (body length: " . strlen($tcContent) . ")");
+
+    // ✅ 1. Extract Hotels
+    $hotels = $this->extractLKHotels($tcContent);
+    foreach ($hotels as $hotel) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'HOTEL',
+            'service_name' => $hotel['name'],
+            'amount_original' => $hotel['amount'],
+            'currency' => $currency,
+            'start_date' => $record->travel_start_date,
+            'end_date' => $record->travel_end_date,
+            'nights' => $hotel['nights'] ?? null,
+            'item_details' => json_encode(['remarks' => $hotel['name']])
+        ]);
+        Log::info("✅ LK HOTEL: {$hotel['name']} - \${$hotel['amount']}");
+    }
+
+    // ✅ 2. Extract Transport
+    $transportItems = $this->extractLKTransport($tcContent);
+    foreach ($transportItems as $item) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'TRANSPORT',
+            'service_name' => $item['service_name'],
+            'amount_original' => $item['amount'],
+            'currency' => $currency,
+            'start_date' => $record->travel_start_date,
+            'end_date' => $record->travel_end_date,
+            'item_details' => json_encode([
+                'remarks' => $item['details']['remarks'] ?? $item['service_name'],
+                'distance_days' => $item['details']['distance_days'] ?? null,
+                'rate' => $item['details']['rate'] ?? null,
+            ])
+        ]);
+        Log::info("✅ LK TRANSPORT: {$item['service_name']} - \${$item['amount']}");
+    }
+
+    // ✅ 3. Extract Other Rates (if any)
+    $otherItems = $this->extractLKOtherRates($tcContent);
+    foreach ($otherItems as $item) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'OTHER RATES',
+            'service_name' => $item['service_name'],
+            'amount_original' => $item['amount'],
+            'currency' => $currency,
+            'start_date' => $record->travel_start_date,
+            'end_date' => $record->travel_end_date,
+            'item_details' => json_encode(['remarks' => $item['details']['remarks'] ?? $item['service_name']])
+        ]);
+        Log::info("✅ LK OTHER RATES: {$item['service_name']} - \${$item['amount']}");
+    }
+
+    // ✅ 4. Fallback: if no items and totalAmount > 0, create a single item
+    if (empty($hotels) && empty($transportItems) && empty($otherItems) && $totalAmount > 0) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'TOUR PACKAGE',
+            'service_name' => 'Total Tour Package',
+            'amount_original' => $totalAmount,
+            'currency' => $currency,
+            'start_date' => $record->travel_start_date,
+            'end_date' => $record->travel_end_date,
+            'item_details' => json_encode(['remarks' => 'Total package cost'])
+        ]);
+        Log::info("✅ LK FALLBACK: Total Tour Package - \${$totalAmount}");
+    } else {
+        Log::info("✅ LK items created: Hotels=" . count($hotels) . ", Transport=" . count($transportItems) . ", Other=" . count($otherItems));
+    }
+}
+
+/**
+ * Extract hotels from Sri Lanka TC content (Hotels/Cruises section)
+ */
+protected function extractLKHotels($text)
+{
+    $hotels = [];
+
+    // Look for "Hotels/Cruises" section
+    if (preg_match('/Hotels\/Cruises(.*?)(?:Transport|$)/is', $text, $sectionMatch)) {
+        $section = $sectionMatch[1];
+        $lines = explode("\n", $section);
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+
+            // Skip header lines
+            if (preg_match('/Best|Westem|Total|Hotel|Name/i', $line)) continue;
+
+            // Try to match: "Best Western 50.00"
+            if (preg_match('/^([A-Za-z\s]+)\s+([\d,]+\.?\d*)$/', $line, $match)) {
+                $name = trim($match[1]);
+                $amount = floatval(str_replace(',', '', $match[2]));
+                if ($amount > 0 && !empty($name) && !is_numeric($name)) {
+                    $hotels[] = [
+                        'name' => $name,
+                        'amount' => $amount,
+                        'nights' => null,
+                    ];
+                }
+            }
+            // Pipe format: | Best Western | 50.00 |
+            elseif (preg_match('/\|\s*([^|]+?)\s*\|\s*([\d,]+\.?\d*)\s*\|/', $line, $match)) {
+                $name = trim($match[1]);
+                $amount = floatval(str_replace(',', '', $match[2]));
+                if ($amount > 0 && !empty($name) && !is_numeric($name)) {
+                    $hotels[] = [
+                        'name' => $name,
+                        'amount' => $amount,
+                        'nights' => null,
+                    ];
+                }
+            }
         }
     }
+
+    return $hotels;
+}
+
+/**
+ * Extract transport items from Sri Lanka TC content
+ */
+protected function extractLKTransport($text)
+{
+    $items = [];
+
+    // Look for Transport section
+    if (preg_match('/Transport(.*?)(?:Attraction|Tour Transfers|Meals|Other Rates|$)/is', $text, $sectionMatch)) {
+        $section = $sectionMatch[1];
+        $lines = explode("\n", $section);
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+
+            // Skip header lines
+            if (preg_match('/EXPENSE|DISTANCE|DAYS|RATE|TOTAL|Travel|Bata|Paging|Highway|Driver|Guide|Water/i', $line)) continue;
+
+            // Pattern: Travel 980 8 1 1 5 0 0 0 0 330.90
+            // Columns: Service, Distance, Days, Rate, ... Total
+            if (preg_match('/^([A-Za-z\s]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.?\d*)$/', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $distance = floatval($match[2]);
+                $days = floatval($match[3]);
+                $rate = floatval($match[4]);
+                $amount = floatval(str_replace(',', '', end($match)));
+
+                if ($amount > 0 && !empty($serviceName) && !preg_match('/total|transport/i', $serviceName)) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => [
+                            'remarks' => "{$serviceName} - {$distance} KM / {$days} Days",
+                            'distance_days' => $distance,
+                            'rate' => $rate,
+                        ]
+                    ];
+                }
+            }
+            // Pipe format: | Travel | 980 | 8 | 1 | 1 | 5 | 0 | 0 | 0 | 0 | 330.90 |
+            elseif (preg_match('/\|\s*([^|]+?)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d,]+\.?\d*)\s*\|/', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $distance = floatval($match[2]);
+                $days = floatval($match[3]);
+                $rate = floatval($match[4]);
+                $amount = floatval(str_replace(',', '', end($match)));
+
+                if ($amount > 0 && !empty($serviceName) && !preg_match('/total|transport/i', $serviceName)) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => [
+                            'remarks' => "{$serviceName} - {$distance} KM / {$days} Days",
+                            'distance_days' => $distance,
+                            'rate' => $rate,
+                        ]
+                    ];
+                }
+            }
+        }
+    }
+
+    return $items;
+}
+
+/**
+ * Extract other rates from Sri Lanka TC content (if any)
+ */
+protected function extractLKOtherRates($text)
+{
+    $items = [];
+
+    // Look for "Other Rates" section
+    if (preg_match('/Other Rates(.*?)(?:Attraction|Tour Transfers|Meals|Transport|$)/is', $text, $sectionMatch)) {
+        $section = $sectionMatch[1];
+        $lines = explode("\n", $section);
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) continue;
+
+            // Skip header lines
+            if (preg_match('/PAX|RATE|TOTAL|Item|Name/i', $line)) continue;
+
+            // Try pipe format: | Service Name | Pax | Rate | Total |
+            if (preg_match('/\|\s*([^|]+?)\s*\|\s*([\d.]+)\s*\|\s*([\d.]+)\s*\|\s*([\d,]+\.?\d*)\s*\|/', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $pax = floatval($match[2]);
+                $rate = floatval($match[3]);
+                $amount = floatval(str_replace(',', '', $match[4]));
+
+                if ($amount > 0 && !empty($serviceName) && !preg_match('/total/i', $serviceName)) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => [
+                            'remarks' => "Pax: {$pax}, Rate: {$rate}",
+                            'pax' => $pax,
+                            'rate' => $rate,
+                        ]
+                    ];
+                }
+            }
+            // Fallback: service name followed by amount
+            elseif (preg_match('/^([A-Za-z\s]+)\s+([\d,]+\.?\d*)$/', $line, $match)) {
+                $serviceName = trim($match[1]);
+                $amount = floatval(str_replace(',', '', $match[2]));
+                if ($amount > 0 && !empty($serviceName) && !preg_match('/total|rate|pax/i', $serviceName)) {
+                    $items[] = [
+                        'service_name' => $serviceName,
+                        'amount' => $amount,
+                        'details' => ['remarks' => $serviceName]
+                    ];
+                }
+            }
+        }
+    }
+
+    return $items;
+}
 }

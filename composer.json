@@ -17,6 +17,7 @@
         "openai-php/laravel": "^0.20.0",
         "phpoffice/phpspreadsheet": "^5.8",
         "phpoffice/phpword": "*",
+        "smalot/pdfparser": "^2.12",
         "webklex/laravel-imap": "^6.2",
         "webklex/php-imap": "^6.2"
     },

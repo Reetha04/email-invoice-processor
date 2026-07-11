@@ -5,6 +5,7 @@ use App\Http\Controllers\PnlController;
 use App\Http\Controllers\CreditController;
 use App\Services\ClientManager;
 use App\Http\Controllers\ReportController;
+use App\Http\Controllers\PayableReportController;
 
 // ========== INVOICE ROUTES ==========
 Route::get('/', [InvoiceController::class, 'index'])->name('index');
@@ -66,7 +67,8 @@ Route::get('/test-mail', function () {
 });
 
 Route::post('/generate-revised-invoice', [InvoiceController::class, 'generateRevisedInvoice'])->name('generate.revised.invoice');
-
+Route::get('/payable-report', [PayableReportController::class, 'index'])->name('payable.report');
+Route::get('/payable-report/export', [PayableReportController::class, 'export'])->name('payable.export');
 
 // ========== REPORT ROUTES ==========
 Route::prefix('reports')->name('reports.')->group(function () {

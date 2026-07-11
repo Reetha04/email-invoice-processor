@@ -46,6 +46,7 @@ class PnlRecord extends Model
               'adult_count',  // ✅ Add this
     'child_count',  // ✅ Add this
     'total_nights',
+    'staging_import_id'
 
     ];
 

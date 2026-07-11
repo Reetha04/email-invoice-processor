@@ -282,9 +282,9 @@ public function viewInvoice($id)
                     
                     // Send email with attachment
                    
-                Mail::to('kevinraj@aahaas.com')
-                    ->cc('raja.lakshmi@aahaas.com')
-                    ->send(new InvoiceMail($invoice, $emailType));
+                // Mail::to('kevinraj@aahaas.com')
+                //     ->cc('raja.lakshmi@aahaas.com')
+                //     ->send(new InvoiceMail($invoice, $emailType));
                 
                 Log::info("📧 Invoice email sent for: " . $invoice->invoice_number);
                 

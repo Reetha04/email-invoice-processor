@@ -22,7 +22,6 @@ class OpenAIService
     public function extractGuestId($plainText, $htmlBody = null)
     {
         try {
-            // Prepare the prompt
             $prompt = $this->buildGuestIdPrompt($plainText);
             
             $response = Http::withHeaders([
@@ -40,7 +39,7 @@ class OpenAIService
                         'content' => $prompt
                     ]
                 ],
-                'temperature' => 0.1, // Low temperature for consistent results
+                'temperature' => 0.1,
                 'max_tokens' => 50,
             ]);
 
@@ -58,7 +57,6 @@ class OpenAIService
             return 'NA';
         }
     }
-
     /**
      * Build the prompt for Guest ID extraction
      */
@@ -130,38 +128,52 @@ PROMPT;
         }
     }
 
-    /**
-     * Build multi-field extraction prompt
-     */
-   /**
- * Build multi-field extraction prompt
- */
-protected function buildMultiFieldPrompt($text)
-{
-    return <<<PROMPT
+   protected function buildMultiFieldPrompt($text)
+    {
+        return <<<PROMPT
 Extract the following fields from this tour confirmation email. Return ONLY valid JSON.
 
 Fields to extract:
-1. guest_id - The Guest ID (e.g., "6A43F887B46606000172B9BB" or "IN1B1782989769823"). If not found, use null.
-2. reference_no - The Reference/IS Number (e.g., "VN40232" or "VN 40232" or "NL1234567890"). If not found, use null.
+1. **guest_id** - The Guest/Booking/MMT ID
+   - Look for these labels: "Guests ID:", "Guest ID:", "Booking ID:", "MMT ID:", "Confirmation ID:", "Booking ID", "Confirmation"
+   - Examples: "6A43F887B46606000172B9BB", "IN1B1782989769823", "MMT123456"
+   - This is a unique alphanumeric identifier (20-30 characters usually)
+   - If multiple IDs found, prefer the one labeled "Guest ID" or "Guests ID"
+
+2. **agent_id** - The Agent/Booking reference
+   - Look for these labels: "Agent ID:", "Booking ID:", "MMT ID:", "Confirmation ID:"
+   - Examples: "6A43F887B46606000172B9BB", "IN1B1782989769823"
+   - Usually same as Guest ID for some bookings
+
+3. **sales_person** - The Sales Person name
+   - Look for these labels: "Sales Person:", "Sales:", "Handler:", "File Handler:"
+   - Examples: "Mr. Shahinsha", "Saratha", "Madhu", "Esther"
+   - If not found, check if there's a name after "Sales Person" or "File Handler"
+
+4. **reference_no** - The Reference/IS Number
+   - Look for: "IS Number:", "Reference No:", "Tour Ref:"
+   - Example: "VN40232", "MY23030"
+
+5. **agent_name** - The Agent/Company name
+   - Look for: "Agent:", "Agent Name:", "Agency:"
+   - Example: "FIT", "Global Journeys", "MakeMyTrip"
+
+6. **guest_name** - The Guest/Customer name
+   - Look for: "Guests Name:", "Guest Name:", "Name:"
+   - Example: "MR. Srinandh Subramanian"
 
 Rules:
-- The Guest ID appears after "Guests ID:" or "Guest ID:"
-- The Reference/IS Number appears after:
-  - "IS Number:" 
-  - "Reference No:"
-  - "Booking ID:"
-  - "Tour Ref:" (but extract only the number, not "CNTL" suffix)
-- For "IS Number:" values like "VN 40232", extract "VN40232" or "40232"
-- Do not confuse Agent Name ("Pick your trail") with Reference No
-- Return valid JSON only
+- Return ONLY valid JSON
+- Use null if field not found
+- Sales Person is usually a person's name (Saratha, Madhu, Esther, etc.)
+- Guest ID is usually alphanumeric and 20+ characters
 
 Email content:
 ---
 {$text}
 ---
 PROMPT;
-}
+    }
 /**
  * Extract Total Tour Cost using OpenAI
  */
@@ -972,4 +984,644 @@ protected function extractTableDataRegex($content)
         
         return !empty($data) ? $data : null;
     }
+
+    /**
+ * ✅ NEW: Extract COMPLETE TC data including hotels, transport, meals
+ */
+   public function extractTCDataFull($content, $invoiceNumber, $folderName)
+    {
+        // Detect if it's Malaysia content
+        $isMalaysia = (stripos($content, 'RM') !== false || 
+                       stripos($content, 'MYR') !== false ||
+                       stripos($content, 'Malaysia') !== false ||
+                       stripos($folderName, 'MY') !== false);
+
+        if ($isMalaysia) {
+            return $this->extractMalaysiaTCData($content, $invoiceNumber, $folderName);
+        }
+
+        // Default: General extraction
+        try {
+            $prompt = <<<PROMPT
+Extract these fields from this tour confirmation document:
+
+1. **tour_ref** - Tour reference number
+2. **agent_name** - Agent/agency name
+3. **file_handler** - File handler name
+4. **sales_person** - Sales Person name ⭐
+5. **guest_id** - Guest/Booking ID (MMT ID, Booking ID, Confirmation ID) ⭐
+6. **guest_name** - Guest name
+7. **guest_count** - Number of guests
+8. **arrival_date** - Arrival date in YYYY-MM-DD
+9. **departure_date** - Departure date in YYYY-MM-DD
+10. **nights** - Total nights
+11. **hotel_name** - Hotel name
+12. **city** - City name
+13. **meal_plan** - Meal plan
+14. **total_amount** - Total tour cost as number
+15. **currency** - Currency code (USD, MYR, SGD)
+
+Document:
+{$content}
+
+Return JSON only.
+PROMPT;
+
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $this->apiKey,
+                'Content-Type' => 'application/json',
+            ])->post('https://api.openai.com/v1/chat/completions', [
+                'model' => $this->model,
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You are an expert at extracting structured data from tour confirmation documents. Return ONLY valid JSON.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => $prompt
+                    ]
+                ],
+                'temperature' => 0.1,
+                'response_format' => ['type' => 'json_object']
+            ]);
+
+            if ($response->successful()) {
+                $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
+                $data = json_decode($content, true);
+                
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    Log::info("✅ OpenAI Full extraction successful for: {$invoiceNumber}");
+                    Log::info("📊 Extracted: " . json_encode($data));
+                    return [
+                        'success' => true,
+                        'data' => $data
+                    ];
+                }
+            }
+            return ['success' => false];
+
+        } catch (\Exception $e) {
+            Log::error("OpenAI Full TC extraction failed: " . $e->getMessage());
+            return ['success' => false];
+        }
+    }
+
+  public function extractGuestIdFromText($text)
+    {
+        // Look for Guest ID patterns
+        $patterns = [
+            '/Guests?\s*ID\s*[:|\s]+([A-Z0-9]{20,})/i',
+            '/Guest\s*ID\s*[:|\s]+([A-Z0-9]{20,})/i',
+            '/Booking\s*ID\s*[:|\s]+([A-Z0-9]{15,})/i',
+            '/MMT\s*ID\s*[:|\s]+([A-Z0-9]{15,})/i',
+            '/Confirmation\s*ID\s*[:|\s]+([A-Z0-9]{15,})/i',
+            '/[A-Z0-9]{24,}/', // Generic long alphanumeric
+        ];
+        
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $text, $match)) {
+                $id = trim($match[1]);
+                if (strlen($id) >= 15) {
+                    Log::info("✅ Found Guest ID: {$id}");
+                    return $id;
+                }
+            }
+        }
+        
+        return null;
+    }
+     public function extractSalesPersonFromText($text)
+    {
+        // Look for Sales Person patterns
+        $patterns = [
+            '/Sales\s*Person\s*[:|\s]+([^\n,]+)/i',
+            '/Sales\s*[:|\s]+([^\n,]+)/i',
+            '/File\s*Handler\s*[:|\s]+([^\n,]+)/i',
+        ];
+        
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $text, $match)) {
+                $name = trim($match[1]);
+                // Clean up
+                $name = preg_replace('/\s+/', ' ', $name);
+                $name = preg_replace('/[^A-Za-z\s\.]/', '', $name);
+                if (!empty($name) && strlen($name) < 50) {
+                    Log::info("✅ Found Sales Person: {$name}");
+                    return $name;
+                }
+            }
+        }
+        
+        return null;
+    }
+    /**
+     * ✅ General TC Data Extraction (fallback)
+     */
+    protected function extractGeneralTCData($content, $invoiceNumber, $folderName)
+    {
+        try {
+            $prompt = <<<PROMPT
+Extract these fields from this tour confirmation document:
+
+1. tour_ref - Tour reference number
+2. agent_name - Agent/agency name
+3. file_handler - File handler name
+4. guest_name - Guest name
+5. guest_count - Number of guests
+6. arrival_date - Arrival date in YYYY-MM-DD
+7. departure_date - Departure date in YYYY-MM-DD
+8. nights - Total nights
+9. hotel_name - Hotel name
+10. city - City name
+11. meal_plan - Meal plan
+12. total_amount - Total tour cost as number
+13. currency - Currency code (USD, MYR, SGD)
+
+Document:
+{$content}
+
+Return JSON only.
+PROMPT;
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $this->apiKey,
+            'Content-Type' => 'application/json',
+        ])->post('https://api.openai.com/v1/chat/completions', [
+            'model' => $this->model,
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => 'You are an expert at extracting structured data from tour confirmation documents. Return ONLY valid JSON.'
+                ],
+                [
+                    'role' => 'user',
+                    'content' => $prompt
+                ]
+            ],
+            'temperature' => 0.1,
+            'response_format' => ['type' => 'json_object']
+        ]);
+
+        if ($response->successful()) {
+            $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
+            $data = json_decode($content, true);
+            
+            if (json_last_error() === JSON_ERROR_NONE) {
+                Log::info("✅ OpenAI Full extraction successful for: {$invoiceNumber}");
+                Log::info("📊 Extracted: " . json_encode($data));
+                return [
+                    'success' => true,
+                    'data' => $data
+                ];
+            } else {
+                Log::error("JSON parse error: " . json_last_error_msg());
+                return ['success' => false];
+            }
+        } else {
+            Log::error("OpenAI API error: " . $response->body());
+            return ['success' => false];
+        }
+
+    } catch (\Exception $e) {
+        Log::error("OpenAI Full TC extraction failed: " . $e->getMessage());
+        return ['success' => false];
+    }
+}
+/**
+ * ✅ Extract ONLY Total Tour Cost using OpenAI
+ */
+  public function extractTotalTourCostOnly($content)
+    {
+        try {
+            $prompt = <<<PROMPT
+Extract ONLY the Total Tour Cost from this document.
+
+Look for these patterns (in order of priority):
+
+1. "Total Tour Cost" followed by currency and amount
+   - Malaysia: "Total Tour Cost RM 4,830.00" → return 4830.00, currency "MYR"
+   - Sri Lanka: "Total Tour Cost \$ 900.00" → return 900.00, currency "USD"
+   - Singapore: "Total Tour Cost SGD 1,200.00" → return 1200.00, currency "SGD"
+
+2. If "Total Tour Cost" not found, look for:
+   - "Grand Total" 
+   - "Total Amount"
+   - "Total Cost"
+
+3. Detect currency from the symbol or code:
+   - "RM" or "MYR" → MYR
+   - "\$" or "USD" → USD
+   - "SGD" or "S$" → SGD
+
+Return ONLY JSON:
+{
+    "total_amount": 4830.00,
+    "currency": "MYR"
+}
+
+If not found:
+{
+    "total_amount": null,
+    "currency": null
+}
+
+Document:
+{$content}
+PROMPT;
+
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $this->apiKey,
+                'Content-Type' => 'application/json',
+            ])->post('https://api.openai.com/v1/chat/completions', [
+                'model' => $this->model,
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You are an expert at extracting Total Tour Cost from documents. Return ONLY valid JSON.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => $prompt
+                    ]
+                ],
+                'temperature' => 0.1,
+                'max_tokens' => 100,
+                'response_format' => ['type' => 'json_object']
+            ]);
+
+            if ($response->successful()) {
+                $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
+                $data = json_decode($content, true);
+                
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    Log::info("🤖 OpenAI extracted Total Cost: " . json_encode($data));
+                    return [
+                        'success' => true,
+                        'data' => $data
+                    ];
+                }
+            }
+            
+            return ['success' => false];
+
+        } catch (\Exception $e) {
+            Log::error("OpenAI Total Cost extraction failed: " . $e->getMessage());
+            return ['success' => false];
+        }
+    }
+
+
+/**
+ * ✅ Extract TC Data for Sri Lanka (LK) specifically
+ */
+public function extractLKTCData($content, $invoiceNumber, $folderName)
+{
+    try {
+        $prompt = <<<PROMPT
+You are extracting data from a SRI LANKA TOUR CONFIRMATION document.
+
+Extract these fields from the document:
+
+1. **tour_ref** - Tour reference number
+   - Look for "Tour Ref:" 
+   - Example: "447662CNTL", "470643CNTL"
+
+2. **agent_name** - Agency name
+   - Look for "Agent:" 
+   - Example: "Pick Your Trails", "ZEAL TOURISM"
+
+3. **file_handler** - File handler name
+   - Look for "File Handler:"
+   - Example: "Miss Shabrina", "Shahil"
+
+4. **guest_name** - Guest name
+   - Look for "Guests Name:" 
+   - Example: "Bhavya", "Ian Savio DSouza"
+
+5. **guest_count** - Number of guests
+   - Look for "No. of Guests:" or "3 Adults | 0 CWB | 0 CNB"
+   - Extract total number (e.g., 2, 3)
+
+6. **arrival_date** - Arrival date in YYYY-MM-DD
+   - Look for "Arrival Date:"
+   - Example: "2026-7-11" → "2026-07-11"
+
+7. **departure_date** - Departure date in YYYY-MM-DD (if available)
+
+8. **nights** - Total nights (if available)
+
+9. **hotel_name** - Hotel name from the table
+   - Example: "Radisson Hotel Kandy", "EKHO Surf Bentota"
+
+10. **city** - City name from the table
+    - Example: "Kandy", "Nuwara Eliya", "Bentota"
+
+11. **meal_plan** - Meal plan
+    - Example: "HB", "BB"
+
+12. **room_type** - Room type
+    - Example: "DBL(1)", "Deluxe"
+
+**Document Content:**
+{$content}
+
+**Return ONLY this JSON:**
+{
+    "tour_ref": null,
+    "agent_name": null,
+    "file_handler": null,
+    "guest_name": null,
+    "guest_count": null,
+    "arrival_date": null,
+    "departure_date": null,
+    "nights": null,
+    "total_amount": null,
+    "currency": "USD",
+    "hotel_name": null,
+    "city": null,
+    "meal_plan": null,
+    "room_type": null,
+    "hotels": []
+}
+
+Return ONLY valid JSON. No explanations, no markdown.
+PROMPT;
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $this->apiKey,
+            'Content-Type' => 'application/json',
+        ])->post('https://api.openai.com/v1/chat/completions', [
+            'model' => $this->model,
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => 'You are an expert at extracting structured data from Sri Lanka tour confirmation documents. Return ONLY valid JSON.'
+                ],
+                [
+                    'role' => 'user',
+                    'content' => $prompt
+                ]
+            ],
+            'temperature' => 0.1,
+            'response_format' => ['type' => 'json_object']
+        ]);
+
+        if ($response->successful()) {
+            $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
+            $data = json_decode($content, true);
+            
+            if (json_last_error() === JSON_ERROR_NONE) {
+                Log::info("✅ OpenAI LK extraction successful for: {$invoiceNumber}");
+                Log::info("📊 LK Extracted: " . json_encode($data));
+                return [
+                    'success' => true,
+                    'data' => $data
+                ];
+            } else {
+                Log::error("JSON parse error: " . json_last_error_msg());
+                return ['success' => false];
+            }
+        } else {
+            Log::error("OpenAI API error: " . $response->body());
+            return ['success' => false];
+        }
+
+    } catch (\Exception $e) {
+        Log::error("OpenAI LK TC extraction failed: " . $e->getMessage());
+        return ['success' => false];
+    }
+}
+/**
+ * Extract PNL data using OpenAI
+ */
+public function extractPNLData($content, $invoiceNumber)
+{
+    try {
+        $prompt = <<<PROMPT
+You are an expert at extracting data from Sri Lanka PNL (Profit & Loss) documents.
+
+Extract the following data from this PNL document in JSON format:
+
+1. **hotels** - Array of hotels with:
+   - name: Hotel name
+   - amount: Total hotel cost (the last number in the row)
+   - nights: Number of nights (if available)
+
+2. **transport_items** - Array of transport items with:
+   - service_name: Name (Travel, Bata, Paging, Driver Accomodation, Water Bottles, etc.)
+   - amount: Total amount
+   - distance: Distance/Days (if available)
+   - rate: Rate (if available)
+
+3. **total_transport** - Total transport cost (sum of all transport items)
+
+4. **total_hotels** - Total hotel cost (sum of all hotels)
+
+5. **total_tour_cost** - The Total Tour Cost
+
+6. **profit_loss** - The Profit/Loss value
+
+**IMPORTANT RULES:**
+- Hotel rows have two totals at the end (Room Night Total and Hotel Total). Use the LAST number as the hotel amount.
+- Example: "Radisson Hotel Kandy (OZO Kandy) 0 0 90 / 90 / 1 0 0 0 0 0 0 2 90.00 180.00" → Hotel amount is 180.00
+- EKHO Surf Bentota has amount 130.00
+
+- Transport items: Each row has 4 columns: Expense, Distance/Days, Rate, Total
+- Example: "Travel 1040 0.2476 257.52" → service_name: "Travel", amount: 257.52
+
+- Water Bottles: "Water Bottles Adt - 1.4, cwb - 0, cnb - 0 2.80USD" → service_name: "Water Bottles", amount: 2.80
+
+**Document content:**
+{$content}
+
+Return ONLY valid JSON. No explanations.
+PROMPT;
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $this->apiKey,
+            'Content-Type' => 'application/json',
+        ])->post('https://api.openai.com/v1/chat/completions', [
+            'model' => $this->model,
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => 'You are an expert at extracting structured data from Sri Lanka PNL documents. Return ONLY valid JSON.'
+                ],
+                [
+                    'role' => 'user',
+                    'content' => $prompt
+                ]
+            ],
+            'temperature' => 0.1,
+            'response_format' => ['type' => 'json_object']
+        ]);
+
+        if ($response->successful()) {
+            $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
+            $data = json_decode($content, true);
+            
+            if (json_last_error() === JSON_ERROR_NONE) {
+                Log::info("✅ OpenAI PNL extraction successful for: {$invoiceNumber}");
+                Log::info("📊 Extracted: " . json_encode($data));
+                return [
+                    'success' => true,
+                    'data' => $data
+                ];
+            }
+        }
+        
+        return ['success' => false];
+
+    } catch (\Exception $e) {
+        Log::error("OpenAI PNL extraction failed: " . $e->getMessage());
+        return ['success' => false];
+    }
+}
+ public function extractMalaysiaTCData($content, $invoiceNumber, $folderName)
+    {
+        try {
+            $prompt = <<<PROMPT
+You are extracting data from a MALAYSIA TOUR CONFIRMATION document.
+
+Extract these fields from the document:
+
+1. **tour_ref** - Tour reference number
+   - Look for "Tour Ref:" or "Tour Reference:"
+   - Example formats:
+     - "Tour Ref 472369CNTL" → extract "472369CNTL"
+     - "Tour Ref: 472369CNTL" → extract "472369CNTL"
+     - "Tour Ref 448629CNTL | MY23030" → extract "448629CNTL"
+   - IMPORTANT: Extract ONLY the CNTL number (the part that ends with CNTL)
+
+2. **agent_name** - Agency name
+   - Look for "Agent:" 
+   - Example: "FIT", "Global Journeys", "MakeMyTrip"
+   - Skip if it says "Agent name revised"
+
+3. **file_handler** - File handler name
+   - Look for "File Handler:"
+   - Example: "P. Sarathapriya", "Madhu", "Saratha"
+
+4. **sales_person** - Sales Person name ⭐ NEW
+   - Look for "Sales Person:" or "Sales:"
+   - Examples: "Mr. Shahinsha", "Saratha", "Madhu", "Esther"
+   - This is the person who made the booking
+   - If "Sales Person:" not found, check "File Handler:" as fallback
+
+5. **guest_id** - Guest/Booking ID ⭐ NEW
+   - Look for "Guests ID:", "Guest ID:", "Booking ID:", "MMT ID:", "Confirmation ID:"
+   - Examples: "6A43F887B46606000172B9BB", "IN1B1782989769823"
+   - This is usually a long alphanumeric string (20-30 characters)
+   - If not found, look for "MMT" or "Booking" reference
+
+6. **guest_name** - Guest name
+   - Look for "Guests Name:" or "Guest Name:"
+   - Example: "MR. Srinandh Subramanian", "MRS. USHA RANI SANKARAMOORTHY"
+
+7. **guest_count** - Number of guests
+   - Look for "No. of Guests:" or "X Adults"
+   - Extract total number (e.g., 2, 3, 4)
+
+8. **arrival_date** - Arrival date in YYYY-MM-DD
+   - Look for "Arrival Date:" or date range like "Jul 13, 2026 - Jul 17, 2026"
+   - Example: "2026-7-13" → "2026-07-13"
+
+9. **departure_date** - Departure date in YYYY-MM-DD
+   - Look for "Departure Date:" or the end of date range
+
+10. **nights** - Total nights (calculate from dates if not directly given)
+
+11. **hotel_name** - Hotel name
+    - Look for hotel name in the itinerary or table
+    - Example: "Upper View Regalia Hotel", "Own Arrangement"
+
+12. **city** - City name
+    - Look for "Kuala Lumpur", "Penang", "Langkawi", etc.
+
+13. **meal_plan** - Meal plan
+    - Look for "Meal Plan:" or "BB", "HB", "FB"
+    - Example: "BB" (Bed & Breakfast)
+
+14. **total_amount** - Total tour cost in RM (Malaysian Ringgit)
+    - Look for "Total Tour Cost RM X,XXX.XX"
+    - Example: "RM 4,830.00" → 4830.00
+
+15. **currency** - Currency code (should be "MYR" for Malaysia)
+
+16. **guest_id** - Guest/Booking ID ⭐
+    - Look for "Guests ID:", "Guest ID:", "Booking ID:", "MMT ID:"
+    - This is the unique identifier for the booking
+    - Examples: "6A43F887B46606000172B9BB", "IN1B1782989769823"
+
+**Document Content:**
+{$content}
+
+**Return ONLY this JSON:**
+{
+    "tour_ref": null,
+    "agent_name": null,
+    "file_handler": null,
+    "sales_person": null,
+    "guest_id": null,
+    "guest_name": null,
+    "guest_count": null,
+    "arrival_date": null,
+    "departure_date": null,
+    "nights": null,
+    "hotel_name": null,
+    "city": null,
+    "meal_plan": null,
+    "total_amount": null,
+    "currency": "MYR"
+}
+
+Return ONLY valid JSON. No explanations, no markdown.
+PROMPT;
+
+            $response = Http::withHeaders([
+                'Authorization' => 'Bearer ' . $this->apiKey,
+                'Content-Type' => 'application/json',
+            ])->post('https://api.openai.com/v1/chat/completions', [
+                'model' => $this->model,
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'You are an expert at extracting structured data from Malaysia tour confirmation documents. Return ONLY valid JSON.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => $prompt
+                    ]
+                ],
+                'temperature' => 0.1,
+                'response_format' => ['type' => 'json_object']
+            ]);
+
+            if ($response->successful()) {
+                $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
+                $data = json_decode($content, true);
+                
+                if (json_last_error() === JSON_ERROR_NONE) {
+                    Log::info("✅ OpenAI Malaysia extraction successful for: {$invoiceNumber}");
+                    Log::info("📊 Malaysia Extracted: " . json_encode($data));
+                    return [
+                        'success' => true,
+                        'data' => $data
+                    ];
+                } else {
+                    Log::error("JSON parse error: " . json_last_error_msg());
+                    return ['success' => false];
+                }
+            } else {
+                Log::error("OpenAI API error: " . $response->body());
+                return ['success' => false];
+            }
+
+        } catch (\Exception $e) {
+            Log::error("OpenAI Malaysia TC extraction failed: " . $e->getMessage());
+            return ['success' => false];
+        }
+    }
+
 }
