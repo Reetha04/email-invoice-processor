@@ -650,6 +650,11 @@ protected function createPnlRecordFromPNL($pnlFile, $folderPath, $folderName, $i
     $totalAmount = $this->extractTotalAmountFromPNL($text);
     $pax = $this->extractPaxFromPNL($text);
     $nights = $this->extractNightsFromPNL($text);
+      $agentName = $data['agent_name'] ?? null;
+        if (!empty($agentName)) {
+            // Truncate to 100 characters max
+            $agentName = substr(trim($agentName), 0, 100);
+        }
      if (empty($agentName)) {
         $agentName = $this->extractFileHandlerFromFolderName($folderName);
     }
