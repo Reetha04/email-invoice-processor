@@ -1115,6 +1115,148 @@ PROMPT;
         
         return null;
     }
+ /**
+ * ✅ Extract Vietnam TC Data - IMPROVED with Total Tour Cost
+ */
+public function extractVietnamTCData($content, $invoiceNumber, $folderName)
+{
+    try {
+        $prompt = <<<PROMPT
+You are extracting data from a VIETNAM TOUR CONFIRMATION document.
+
+Extract these fields from the document:
+
+1. **tour_ref** - Tour reference number
+   - Look for "Tour Ref:" or "Tour Reference:" or "VN" prefix
+   - Example: "VN19675", "VN40116"
+   - Also check the filename/folder name if not in document
+
+2. **agent_name** - Agency name
+   - Look for "Agent:" or "Agency:"
+   - Example: "Make My Trip", "FIT"
+
+3. **file_handler** - File handler name
+   - Look for "File Handler:" 
+   - Example: "Harshini", "Sangeetha"
+
+4. **sales_person** - Sales Person name
+   - Look for "Sales Person:" or "Sales:"
+   - If not found, use "File Handler" as fallback
+
+5. **guest_id** - Guest/Booking ID
+   - Look for "MMT - Booking ID:" or "Booking ID:"
+   - Example: "NL2203595933706"
+   - Also look for "Confirmation Number:"
+
+6. **guest_name** - Guest name
+   - Look for "Guests Name:" or "Lead Passenger Name:"
+   - Example: "Soham Sattigeri"
+
+7. **guest_count** - Number of guests
+   - Look for "Total Passenger:" or "No. of Guests:"
+   - Example: "3 Adults" → 3
+
+8. **arrival_date** - Arrival date in YYYY-MM-DD
+   - Look for "Arrival Date:" 
+   - Example: "01 Aug, 2026" → "2026-08-01"
+
+9. **departure_date** - Departure date in YYYY-MM-DD
+   - Look for "Departure Date:"
+   - Example: "08 Aug, 2026" → "2026-08-08"
+
+10. **nights** - Total nights (calculate from dates)
+
+11. **hotel_name** - Hotel names (from hotel table)
+    - Look for hotels listed under "City" and "Hotel - Own"
+    - Example: "Gilson Hotel Hanoi", "Sepon Blue Hotel", "White Lion Hotel"
+    - If multiple hotels, list the first one
+
+12. **city** - City name
+    - Look for city names: "Hanoi", "Da Nang", "Ho Chi Minh City"
+
+13. **meal_plan** - Meal plan
+    - Look for "Meal:" or "BB", "HB", "FB"
+
+14. **total_amount** - Total tour cost in USD
+    - Look for "Total Tour Cost USD X,XXX.XX"
+    - IMPORTANT: This is usually at the end of the document
+    - Example: "USD 873.00" → 873.00
+
+15. **currency** - Currency code (should be "USD" for Vietnam)
+
+16. **confirmation_number** - Confirmation number
+    - Look for "Confirmation Number:"
+    - Example: "VN19675"
+
+17. **flight_details** - Flight details (extract if available)
+    - Look for flight table
+
+**Document Content:**
+{$content}
+
+**Return ONLY this JSON:**
+{
+    "tour_ref": null,
+    "agent_name": null,
+    "file_handler": null,
+    "sales_person": null,
+    "guest_id": null,
+    "guest_name": null,
+    "guest_count": null,
+    "arrival_date": null,
+    "departure_date": null,
+    "nights": null,
+    "hotel_name": null,
+    "city": null,
+    "meal_plan": null,
+    "total_amount": null,
+    "currency": "USD",
+    "confirmation_number": null,
+    "flight_details": []
+}
+
+Return ONLY valid JSON. No explanations, no markdown.
+PROMPT;
+
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $this->apiKey,
+            'Content-Type' => 'application/json',
+        ])->post('https://api.openai.com/v1/chat/completions', [
+            'model' => $this->model,
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => 'You are an expert at extracting structured data from Vietnam tour confirmation documents. Return ONLY valid JSON. IMPORTANT: Look for "Total Tour Cost USD xxx.xx" - this is usually at the end of the document.'
+                ],
+                [
+                    'role' => 'user',
+                    'content' => $prompt
+                ]
+            ],
+            'temperature' => 0.1,
+            'response_format' => ['type' => 'json_object']
+        ]);
+
+        if ($response->successful()) {
+            $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
+            $data = json_decode($content, true);
+            
+            if (json_last_error() === JSON_ERROR_NONE) {
+                Log::info("✅ OpenAI Vietnam extraction successful for: {$invoiceNumber}");
+                Log::info("📊 Vietnam Extracted: " . json_encode($data));
+                return [
+                    'success' => true,
+                    'data' => $data
+                ];
+            }
+        }
+        return ['success' => false];
+
+    } catch (\Exception $e) {
+        Log::error("OpenAI Vietnam TC extraction failed: " . $e->getMessage());
+        return ['success' => false];
+    }
+}
     /**
      * ✅ General TC Data Extraction (fallback)
      */
@@ -1191,15 +1333,19 @@ PROMPT;
 /**
  * ✅ Extract ONLY Total Tour Cost using OpenAI
  */
-  public function extractTotalTourCostOnly($content)
-    {
-        try {
-            $prompt = <<<PROMPT
+  /**
+ * ✅ Extract ONLY Total Tour Cost using OpenAI - IMPROVED for Vietnam
+ */
+public function extractTotalTourCostOnly($content)
+{
+    try {
+        $prompt = <<<PROMPT
 Extract ONLY the Total Tour Cost from this document.
 
 Look for these patterns (in order of priority):
 
 1. "Total Tour Cost" followed by currency and amount
+   - Vietnam: "Total Tour Cost USD 873.00" → return 873.00, currency "USD"
    - Malaysia: "Total Tour Cost RM 4,830.00" → return 4830.00, currency "MYR"
    - Sri Lanka: "Total Tour Cost \$ 900.00" → return 900.00, currency "USD"
    - Singapore: "Total Tour Cost SGD 1,200.00" → return 1200.00, currency "SGD"
@@ -1208,16 +1354,22 @@ Look for these patterns (in order of priority):
    - "Grand Total" 
    - "Total Amount"
    - "Total Cost"
+   - "Total Package Cost"
 
 3. Detect currency from the symbol or code:
    - "RM" or "MYR" → MYR
    - "\$" or "USD" → USD
    - "SGD" or "S$" → SGD
 
+IMPORTANT:
+- The Total Tour Cost is usually at the end of the document or in a separate section
+- Look for bold or highlighted text
+- Sometimes it appears as "Total Tour Cost USD 873.00" in a separate line
+
 Return ONLY JSON:
 {
-    "total_amount": 4830.00,
-    "currency": "MYR"
+    "total_amount": 873.00,
+    "currency": "USD"
 }
 
 If not found:
@@ -1230,46 +1382,89 @@ Document:
 {$content}
 PROMPT;
 
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $this->apiKey,
-                'Content-Type' => 'application/json',
-            ])->post('https://api.openai.com/v1/chat/completions', [
-                'model' => $this->model,
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'You are an expert at extracting Total Tour Cost from documents. Return ONLY valid JSON.'
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $prompt
-                    ]
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $this->apiKey,
+            'Content-Type' => 'application/json',
+        ])->post('https://api.openai.com/v1/chat/completions', [
+            'model' => $this->model,
+            'messages' => [
+                [
+                    'role' => 'system',
+                    'content' => 'You are an expert at extracting Total Tour Cost from documents. Return ONLY valid JSON. Look for "Total Tour Cost" followed by currency and amount.'
                 ],
-                'temperature' => 0.1,
-                'max_tokens' => 100,
-                'response_format' => ['type' => 'json_object']
-            ]);
+                [
+                    'role' => 'user',
+                    'content' => $prompt
+                ]
+            ],
+            'temperature' => 0.1,
+            'max_tokens' => 150,
+            'response_format' => ['type' => 'json_object']
+        ]);
 
-            if ($response->successful()) {
-                $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
-                $data = json_decode($content, true);
-                
-                if (json_last_error() === JSON_ERROR_NONE) {
-                    Log::info("🤖 OpenAI extracted Total Cost: " . json_encode($data));
-                    return [
-                        'success' => true,
-                        'data' => $data
-                    ];
-                }
-            }
+        if ($response->successful()) {
+            $content = $response->json()['choices'][0]['message']['content'] ?? '{}';
+            $data = json_decode($content, true);
             
-            return ['success' => false];
-
-        } catch (\Exception $e) {
-            Log::error("OpenAI Total Cost extraction failed: " . $e->getMessage());
-            return ['success' => false];
+            if (json_last_error() === JSON_ERROR_NONE) {
+                Log::info("🤖 OpenAI extracted Total Cost: " . json_encode($data));
+                return [
+                    'success' => true,
+                    'data' => $data
+                ];
+            }
         }
+        
+        // ✅ Fallback: Try regex for "Total Tour Cost USD xxx.xx"
+        if (preg_match('/Total\s+Tour\s+Cost\s*USD?\s*([\d,]+\.\d{2})/i', $content, $match)) {
+            $amount = floatval(str_replace(',', '', $match[1]));
+            Log::info("💰 Regex extracted Total Cost: {$amount} USD");
+            return [
+                'success' => true,
+                'data' => [
+                    'total_amount' => $amount,
+                    'currency' => 'USD'
+                ]
+            ];
+        }
+        
+        // ✅ Fallback: Try regex for "USD xxx.xx"
+        if (preg_match('/USD?\s*([\d,]+\.\d{2})/i', $content, $match)) {
+            $amount = floatval(str_replace(',', '', $match[1]));
+            if ($amount > 0) {
+                Log::info("💰 Regex extracted USD amount: {$amount}");
+                return [
+                    'success' => true,
+                    'data' => [
+                        'total_amount' => $amount,
+                        'currency' => 'USD'
+                    ]
+                ];
+            }
+        }
+        
+        // ✅ Fallback: Try regex for "$ xxx.xx"
+        if (preg_match('/\$\s*([\d,]+\.\d{2})/', $content, $match)) {
+            $amount = floatval(str_replace(',', '', $match[1]));
+            if ($amount > 0) {
+                Log::info("💰 Regex extracted dollar amount: {$amount}");
+                return [
+                    'success' => true,
+                    'data' => [
+                        'total_amount' => $amount,
+                        'currency' => 'USD'
+                    ]
+                ];
+            }
+        }
+        
+        return ['success' => false];
+
+    } catch (\Exception $e) {
+        Log::error("OpenAI Total Cost extraction failed: " . $e->getMessage());
+        return ['success' => false];
     }
+}
 
 
 /**

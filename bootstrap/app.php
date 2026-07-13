@@ -21,10 +21,9 @@ return Application::configure(basePath: dirname(__DIR__))
     })
     ->withCommands([
         // ✅ Register your custom commands here
-          App\Console\Commands\OneDriveSync::class,
-        // App\Console\Commands\OneDriveSyncAllCountries::class,
-        // App\Console\Commands\OneDriveSyncFuture::class,
-        // App\Console\Commands\OneDriveProcessStaging::class,
+        App\Console\Commands\OneDriveSyncAllCountries::class,
+        App\Console\Commands\OneDriveSyncFuture::class,
+        App\Console\Commands\OneDriveProcessStaging::class,
     ])
     ->withSchedule(function (Schedule $schedule) {
         
@@ -38,32 +37,27 @@ return Application::configure(basePath: dirname(__DIR__))
             ->appendOutputTo(storage_path('logs/pnl_fetch.log'));
         
         // ✅ ONE DRIVE SYNC - ALL COUNTRIES (Every 30 minutes)
-        // $schedule->command('onedrive:sync-all')
-        //     ->everyThirtyMinutes()
-        //     ->withoutOverlapping()
-        //     ->appendOutputTo(storage_path('logs/onedrive_all.log'));
-        
-        // Process staging every 10 minutes
-        // $schedule->command('onedrive:process')
-        //     ->everyTenMinutes()
-        //     ->withoutOverlapping()
-        //     ->appendOutputTo(storage_path('logs/onedrive_process.log'));
-        
-        // ✅ Daily Report at 11:59 PM
-        // $schedule->command('report:daily --upload')
-        //     ->dailyAt('23:59')
-        //     ->timezone('Asia/Kolkata')
-        //     ->appendOutputTo(storage_path('logs/daily_report.log'));
-        
-        // // ✅ Daily P&L Report at 11:59 PM
-        // $schedule->command('pnl:report:daily --upload')
-        //     ->dailyAt('23:59')
-        //     ->timezone('Asia/Kolkata')
-        //     ->appendOutputTo(storage_path('logs/daily_pnl_report.log'));
-         $schedule->command('onedrive:sync --country=MY')
+        $schedule->command('onedrive:sync-all')
             ->everyThirtyMinutes()
             ->withoutOverlapping()
-            ->appendOutputTo(storage_path('logs/onedrive_my.log'));
+            ->appendOutputTo(storage_path('logs/onedrive_all.log'));
+        
+        // Process staging every 10 minutes
+        $schedule->command('onedrive:process')
+            ->everyTenMinutes()
+            ->withoutOverlapping()
+            ->appendOutputTo(storage_path('logs/onedrive_process.log'));
+        
+        // ✅ Daily Report at 11:59 PM
+        $schedule->command('report:daily --upload')
+            ->dailyAt('23:59')
+            ->timezone('Asia/Kolkata')
+            ->appendOutputTo(storage_path('logs/daily_report.log'));
+        
+        // ✅ Daily P&L Report at 11:59 PM
+        $schedule->command('pnl:report:daily --upload')
+            ->dailyAt('23:59')
+            ->timezone('Asia/Kolkata')
+            ->appendOutputTo(storage_path('logs/daily_pnl_report.log'));
     })
-    
     ->create();

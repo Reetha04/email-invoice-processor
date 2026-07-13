@@ -4,28 +4,36 @@
 @section('content')
     <div class="pnl-container">
         <!-- Header Section -->
-        <div class="pnl-header">
-            <div class="header-content">
-                <div class="header-left">
-                    <div class="header-icon">
-                        <i class="fas fa-chart-pie"></i>
-                    </div>
-                    <div>
-                        <h1 class="pnl-title">Profit & Loss Dashboard</h1>
-                        <p class="pnl-subtitle">Manage vendor expenses and financial overview</p>
-                    </div>
-                </div>
-                <div class="header-actions">
-                    <button type="button" class="btn-pnl btn-pnl-primary"
-                        onclick="event.preventDefault(); document.getElementById('fetch-form').submit();">
-                        <i class="fas fa-cloud-download-alt me-2"></i> Fetch Emails
-                    </button>
-                    <form id="fetch-form" action="{{ route('pnl.fetch') }}" method="POST" class="d-none">
-                        @csrf
-                    </form>
-                </div>
+       <!-- Header Section -->
+<div class="pnl-header">
+    <div class="header-content">
+        <div class="header-left">
+            <div class="header-icon">
+                <i class="fas fa-chart-pie"></i>
+            </div>
+            <div>
+                <h1 class="pnl-title">Profit & Loss Dashboard</h1>
+                <p class="pnl-subtitle">Manage vendor expenses and financial overview</p>
             </div>
         </div>
+        <div class="header-actions">
+            <!-- ✅ ADD THIS - Payable Report Button -->
+            <a href="{{ route('payable.report', ['country' => 'LK', 'deadline' => 4]) }}" 
+               class="btn-pnl btn-pnl-warning" 
+               style="background: #f59e0b; color: #fff; border: none;">
+                <i class="fas fa-file-invoice-dollar me-2"></i> Payable Report
+            </a>
+            
+            <button type="button" class="btn-pnl btn-pnl-primary"
+                onclick="event.preventDefault(); document.getElementById('fetch-form').submit();">
+                <i class="fas fa-cloud-download-alt me-2"></i> Fetch Emails
+            </button>
+            <form id="fetch-form" action="{{ route('pnl.fetch') }}" method="POST" class="d-none">
+                @csrf
+            </form>
+        </div>
+    </div>
+</div>
 
         <!-- Stats Cards -->
         <!-- Stats Cards -->

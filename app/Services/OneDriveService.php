@@ -880,8 +880,7 @@ protected function extractTotalAmountFromPNL($text)
         
         return $this->processFileData($file, null, $parentPath, $folderName, $invoiceNumber, $country, $runId);
     }
-
-  protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $invoiceNumber, $country, $runId)
+protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $invoiceNumber, $country, $runId)
 {
     try {
         // Download TC content
@@ -896,7 +895,6 @@ protected function extractTotalAmountFromPNL($text)
             ];
         }
         
-        // ✅ EXTRACT DATE AND MONTH FROM THE ACTUAL FILE PATH
         $dateFolder = $this->extractDateFolder($filePath);
         $monthFolder = $this->extractMonthFolder($filePath);
         
@@ -904,32 +902,62 @@ protected function extractTotalAmountFromPNL($text)
         Log::info("📅 Date Folder from path: {$dateFolder}");
         Log::info("📅 Month Folder from path: {$monthFolder}");
         
-        // ✅ Store date folder for fallback
         $this->dateFolder = $dateFolder;
         $textContent = $docxContent['text'] ?? '';
         
-        // ✅ Extract data based on country
-        if ($country === 'MY') {
-            // MALAYSIA: Use table extraction (No OpenAI)
-            $extractedData = $this->extractMalaysiaTCData($docxContent, $folderName, $invoiceNumber);
-            Log::info("📊 Malaysia TC extracted using TABLE PARSER for {$invoiceNumber}");
+        // ✅✅✅ FIX: Direct OpenAI call for ALL countries
+        $openAI = app(\App\Services\OpenAIService::class);
+        
+        // Step 1: Extract Total Tour Cost using OpenAI
+        $totalResult = $openAI->extractTotalTourCostOnly($textContent);
+        $totalAmount = 0;
+        $currency = 'MYR';
+        
+        if ($totalResult['success'] && isset($totalResult['data']['total_amount'])) {
+            $totalAmount = $totalResult['data']['total_amount'];
+            $currency = $totalResult['data']['currency'] ?? 'MYR';
+            Log::info("💰 OpenAI extracted total_amount: {$totalAmount} {$currency}");
         } else {
-            // ✅ OTHER COUNTRIES (SG, VN, LK): Use OpenAI
-            $extractedData = $this->extractWithOpenAI($textContent, $folderName, $invoiceNumber);
-            Log::info("📊 OpenAI extraction for {$invoiceNumber} ({$country})");
+            // ✅ Fallback: Use regex to find amount
+            $totalAmount = $this->extractTotalAmountFromText($textContent);
+            Log::info("💰 Fallback total_amount: {$totalAmount}");
         }
         
-        // ✅ If still no total_amount, try force extraction from text
-        if (empty($extractedData['total_amount']) || $extractedData['total_amount'] == 0) {
-            $extractedData['total_amount'] = $this->extractTotalAmountFromText($textContent);
-            Log::info("💰 Force extracted total amount: {$extractedData['total_amount']}");
+        // Step 2: Extract other fields using OpenAI
+        $extractedData = [];
+        
+        if ($country === 'MY') {
+            $result = $openAI->extractMalaysiaTCData($textContent, $invoiceNumber, $folderName);
+            if ($result['success'] && !empty($result['data'])) {
+                $extractedData = $result['data'];
+            } else {
+                // Fallback: Use regex for Malaysia
+                $extractedData = $this->extractMalaysiaTCDataRegex($textContent, $folderName, $invoiceNumber);
+            }
+        } elseif ($country === 'VN') {
+            $result = $openAI->extractVietnamTCData($textContent, $invoiceNumber, $folderName);
+            if ($result['success'] && !empty($result['data'])) {
+                $extractedData = $result['data'];
+            }
+        } elseif ($country === 'LK') {
+            $result = $openAI->extractLKTCData($textContent, $invoiceNumber, $folderName);
+            if ($result['success'] && !empty($result['data'])) {
+                $extractedData = $result['data'];
+            }
+        } else {
+            $result = $openAI->extractTCDataFull($textContent, $invoiceNumber, $folderName);
+            if ($result['success'] && !empty($result['data'])) {
+                $extractedData = $result['data'];
+            }
         }
         
-        // ✅ If country is LK, ensure currency is USD
-        if ($country === 'LK') {
-            $extractedData['currency'] = 'USD';
-        }
+        // ✅ FORCE total_amount from OpenAI or fallback
+        $extractedData['total_amount'] = $totalAmount;
+        $extractedData['currency'] = ($country === 'MY') ? 'MYR' : (($country === 'VN' || $country === 'LK') ? 'USD' : 'MYR');
+        $extractedData['invoice_number'] = $invoiceNumber;
+        $extractedData['folder_name'] = $folderName;
         
+        // ✅ If file handler missing, try from folder name
         if (empty($extractedData['file_handler'])) {
             $extractedData['file_handler'] = $this->extractFileHandlerFromFolderName($folderName);
             if ($extractedData['file_handler']) {
@@ -937,11 +965,10 @@ protected function extractTotalAmountFromPNL($text)
             }
         }
         
-        // ✅ Ensure date_folder and month_folder are from the path
         $extractedData['date_folder_from_path'] = $dateFolder;
         $extractedData['month_folder_from_path'] = $monthFolder;
         
-        // ✅ Log what was extracted
+        // Log what was extracted
         Log::info("📊 Extracted Data for {$invoiceNumber}:");
         Log::info("  - Tour Ref: " . ($extractedData['tour_ref'] ?? 'NULL'));
         Log::info("  - Agent: " . ($extractedData['agent_name'] ?? 'NULL'));
@@ -950,10 +977,8 @@ protected function extractTotalAmountFromPNL($text)
         Log::info("  - Nights: " . ($extractedData['nights'] ?? 'NULL'));
         Log::info("  - Total Amount: " . ($extractedData['total_amount'] ?? 'NULL'));
         Log::info("  - Currency: " . ($extractedData['currency'] ?? 'NULL'));
-        Log::info("  - Date Folder (from path): {$dateFolder}");
-        Log::info("  - Month Folder (from path): {$monthFolder}");
         
-        // ✅ Save to staging
+        // Save to staging
         $import = OneDriveImport::create([
             'folder_name' => $folderName,
             'invoice_number' => $invoiceNumber,
@@ -972,21 +997,20 @@ protected function extractTotalAmountFromPNL($text)
             'currency' => $extractedData['currency'] ?? 'MYR',
         ]);
         
-        Log::info("✅ Saved to OneDriveImport with tour_ref: " . ($extractedData['tour_ref'] ?? 'NULL'));
-        Log::info("✅ Month Folder saved: {$monthFolder}");
-        Log::info("✅ Date Folder saved: {$dateFolder}");
+        Log::info("✅ Saved to OneDriveImport with total_amount: " . ($extractedData['total_amount'] ?? 'NULL'));
         
         // Process immediately
         $this->processStagingRecord($import->id);
-         $record = PnlRecord::where('invoice_number', $invoiceNumber)->first();
-    $recordId = $record ? $record->id : null;
+        $record = PnlRecord::where('invoice_number', $invoiceNumber)->first();
+        $recordId = $record ? $record->id : null;
+        
         return [
             'folder' => $folderName,
             'invoice_number' => $invoiceNumber,
             'tour_ref' => $extractedData['tour_ref'] ?? null,
             'status' => 'processed',
             'import_id' => $import->id,
-             'record_id' => $recordId, 
+            'record_id' => $recordId, 
             'reason' => 'Saved to staging and processed'
         ];
         
@@ -1356,7 +1380,7 @@ protected function downloadAndReadDocx($folderPath, $fileName, $country = null)
     }
 }
 /**
- * ✅ Extract content from DOCX including tables - BULLETPROOF FIX
+ * ✅ Extract content from DOCX including tables - IMPROVED
  */
 protected function extractDocxContent($phpWord)
 {
@@ -1377,14 +1401,13 @@ protected function extractDocxContent($phpWord)
                     continue;
                 }
                 
-                // 2. SAFE text extraction - use try-catch for each element
+                // 2. Text elements
                 try {
                     $elementText = $this->extractElementText($element);
                     if (!empty($elementText)) {
                         $text .= $elementText . ' ';
                     }
                 } catch (\Exception $e) {
-                    // Skip problematic elements
                     continue;
                 }
             }
@@ -1398,12 +1421,17 @@ protected function extractDocxContent($phpWord)
     $text = preg_replace('/\s+/', ' ', $text);
     $text = trim($text);
     
+    Log::info("📄 Extracted text length: " . strlen($text));
+    Log::info("📄 Extracted tables: " . count($tables));
+    
     return [
         'text' => $text,
         'tables' => $tables
     ];
 }
-
+/**
+ * ✅ Extract data from a table
+ */
 /**
  * ✅ SAFE: Extract text from any element
  */
@@ -1457,65 +1485,45 @@ protected function extractElementText($element)
     
     return '';
 }
-
 /**
- * ✅ Extract data from a table
+ * ✅ Extract data from a table - ALWAYS extract all rows
  */
 protected function extractTableData($table)
 {
     $data = [];
-    $headers = [];
-    $rowIndex = 0;
     
     foreach ($table->getRows() as $row) {
         $cells = $row->getCells();
         $rowData = [];
         
-        foreach ($cells as $cellIndex => $cell) {
+        foreach ($cells as $cell) {
             $cellText = '';
+            // Use extractElementText to handle all element types inside the cell
             foreach ($cell->getElements() as $element) {
-                if (method_exists($element, 'getText')) {
-                    $cellText .= $element->getText() . ' ';
-                }
+                $cellText .= $this->extractElementText($element) . ' ';
             }
-            $cellText = trim($cellText);
-            $rowData[] = $cellText;
+            $rowData[] = trim($cellText);
         }
         
-        if ($rowIndex === 0) {
-            // First row as headers
-            $headers = $rowData;
-        } else {
-            // Data rows
-            $rowDataAssoc = [];
-            foreach ($headers as $index => $header) {
-                $key = strtolower(trim($header));
-                $value = $rowData[$index] ?? '';
-                $rowDataAssoc[$key] = trim($value);
-            }
-            
-            // Check if this row has meaningful data
-            $hasData = false;
-            foreach ($rowDataAssoc as $value) {
-                if (!empty($value) && $value !== '-') {
-                    $hasData = true;
-                    break;
-                }
-            }
-            
-            if ($hasData) {
-                $data[] = $rowDataAssoc;
+        // Only add rows that have at least one non-empty cell
+        $hasData = false;
+        foreach ($rowData as $cell) {
+            if (!empty($cell) && $cell !== '-' && $cell !== '|') {
+                $hasData = true;
+                break;
             }
         }
         
-        $rowIndex++;
+        if ($hasData) {
+            $data[] = $rowData;
+        }
     }
     
     return $data;
 }
 
 /**
- * ✅ Convert table to text for fallback
+ * ✅ Convert table to text - join all cells with spaces
  */
 protected function tableToText($tableData)
 {
@@ -1526,11 +1534,18 @@ protected function tableToText($tableData)
     return $text;
 }
 
+/**
+ * Extract Malaysia TC Data - USING OPENAI ON FULL DOCX CONTENT
+ */
 protected function extractMalaysiaTCData($docxContent, $folderName, $invoiceNumber)
 {
     $text = $docxContent['text'] ?? '';
     
-    // ✅ Try OpenAI first
+    // ✅ Log the content length
+    Log::info("📄 Malaysia TC content length: " . strlen($text));
+    Log::info("📄 Content preview: " . substr($text, 0, 500));
+    
+    // ✅ TRY OPENAI FIRST - with full text including tables
     try {
         $openAI = app(\App\Services\OpenAIService::class);
         $result = $openAI->extractMalaysiaTCData($text, $invoiceNumber, $folderName);
@@ -1542,8 +1557,11 @@ protected function extractMalaysiaTCData($docxContent, $folderName, $invoiceNumb
             if (empty($data['currency'])) {
                 $data['currency'] = 'MYR';
             }
-            if ($data['currency'] == 'RM') {
-                $data['currency'] = 'MYR';
+            
+            // ✅ If total_amount is still null or 0, try to extract from text
+            if (empty($data['total_amount']) || $data['total_amount'] == 0) {
+                $data['total_amount'] = $this->extractTotalAmountFromText($text);
+                Log::info("💰 Extracted total from text: {$data['total_amount']}");
             }
             
             Log::info("✅ OpenAI Malaysia extraction successful for: {$invoiceNumber}");
@@ -1554,9 +1572,145 @@ protected function extractMalaysiaTCData($docxContent, $folderName, $invoiceNumb
         Log::error("OpenAI extraction failed: " . $e->getMessage());
     }
     
-    // ✅ Fallback: Regex (as backup)
-    Log::warning("⚠️ OpenAI failed, using regex fallback for: {$invoiceNumber}");
-    return $this->extractMalaysiaTCDataRegex($docxContent, $folderName, $invoiceNumber);
+    // ✅ FALLBACK: Try to extract directly from tables and text
+    Log::warning("⚠️ OpenAI failed, using fallback for: {$invoiceNumber}");
+    return $this->extractMalaysiaTCDataFallback($docxContent, $folderName, $invoiceNumber);
+}
+
+/**
+ * ✅ FALLBACK: Extract Malaysia TC Data - INCLUDING TABLES
+ */
+protected function extractMalaysiaTCDataFallback($docxContent, $folderName, $invoiceNumber)
+{
+    $text = $docxContent['text'] ?? '';
+    $tables = $docxContent['tables'] ?? [];
+    
+    $data = [
+        'tour_ref' => null,
+        'agent_name' => null,
+        'file_handler' => null,
+        'sales_person' => null,
+        'guest_id' => null,
+        'guest_name' => null,
+        'guest_count' => 1,
+        'arrival_date' => null,
+        'departure_date' => null,
+        'nights' => null,
+        'hotel_name' => null,
+        'city' => null,
+        'meal_plan' => null,
+        'total_amount' => 0,
+        'currency' => 'MYR'
+    ];
+    
+    // ✅ 1. Extract from Tables first (most reliable)
+    foreach ($tables as $tableData) {
+        foreach ($tableData as $row) {
+            // Look for Total Tour Cost in table
+            foreach ($row as $key => $value) {
+                if (stripos($value, 'Total Tour Cost') !== false) {
+                    // Check if amount is in same row or next cell
+                    if (isset($row[array_search($key, array_keys($row)) + 1])) {
+                        $amountStr = $row[array_search($key, array_keys($row)) + 1];
+                        if (preg_match('/([\d,]+\.\d{2})/', $amountStr, $match)) {
+                            $data['total_amount'] = floatval(str_replace(',', '', $match[1]));
+                            Log::info("💰 Found Total in table: {$data['total_amount']}");
+                        }
+                    }
+                }
+            }
+            
+            // Extract hotel/city/nights from table
+            if (isset($row['hotel']) || isset($row['city']) || isset($row['nights'])) {
+                if (!empty($row['hotel']) && empty($data['hotel_name'])) {
+                    $data['hotel_name'] = $row['hotel'];
+                }
+                if (!empty($row['city']) && empty($data['city'])) {
+                    $data['city'] = $row['city'];
+                }
+                if (!empty($row['nights']) && empty($data['nights'])) {
+                    $data['nights'] = intval($row['nights']);
+                }
+                if (!empty($row['meal type']) && empty($data['meal_plan'])) {
+                    $data['meal_plan'] = $row['meal type'];
+                }
+            }
+        }
+    }
+    
+    // ✅ 2. If total_amount still 0, extract from text
+    if ($data['total_amount'] == 0) {
+        $data['total_amount'] = $this->extractTotalAmountFromText($text);
+        Log::info("💰 Fallback total from text: {$data['total_amount']}");
+    }
+    
+    // ✅ 3. Extract other fields from text
+    $cleanText = preg_replace('/\s+/', ' ', $text);
+    
+    // Tour Ref
+    if (preg_match('/Tour\s+Ref\s*[:|\s]+([A-Z0-9]+)/i', $cleanText, $match)) {
+        $data['tour_ref'] = trim($match[1]);
+    }
+    
+    // File Handler
+    if (preg_match('/File\s+Handler\s*[:|\s]+([^\n,]+)/i', $cleanText, $match)) {
+        $data['file_handler'] = trim($match[1]);
+        $data['sales_person'] = $data['file_handler'];
+    }
+    
+    // Agent
+    if (preg_match('/Agent\s*[:|\s]+([^\n,]+)/i', $cleanText, $match)) {
+        $agent = trim($match[1]);
+        if (strlen($agent) < 30 && !preg_match('/name\s+revised/i', $agent)) {
+            $data['agent_name'] = $agent;
+        }
+    }
+    
+    // Guest Name
+    if (preg_match('/Guests?\s+Name\s*[:|\s]+([^\n,]+)/i', $cleanText, $match)) {
+        $data['guest_name'] = trim($match[1]);
+    }
+    
+    // Guest Count
+    if (preg_match('/No\.?\s*of\s*Guests?\s*[:|\s]+(\d+)\s*Adults?/i', $cleanText, $match)) {
+        $data['guest_count'] = intval($match[1]);
+    }
+    
+    // Dates
+    if (preg_match('/Arrival\s+Date\s*[:|\s]+(\d{1,2})\s+([A-Za-z]{3,}),?\s*(\d{4})/i', $cleanText, $match)) {
+        $day = intval($match[1]);
+        $month = $this->getMonthNumber($match[2]);
+        $year = intval($match[3]);
+        if ($month) {
+            $data['arrival_date'] = sprintf("%04d-%02d-%02d", $year, $month, $day);
+        }
+    }
+    
+    if (preg_match('/Departure\s+Date\s*[:|\s]+(\d{1,2})\s+([A-Za-z]{3,}),?\s*(\d{4})/i', $cleanText, $match)) {
+        $day = intval($match[1]);
+        $month = $this->getMonthNumber($match[2]);
+        $year = intval($match[3]);
+        if ($month) {
+            $data['departure_date'] = sprintf("%04d-%02d-%02d", $year, $month, $day);
+        }
+    }
+    
+    // Calculate nights from dates
+    if ($data['arrival_date'] && $data['departure_date'] && empty($data['nights'])) {
+        $start = strtotime($data['arrival_date']);
+        $end = strtotime($data['departure_date']);
+        if ($start && $end) {
+            $data['nights'] = round(($end - $start) / (60 * 60 * 24));
+        }
+    }
+    
+    // Guest ID (Booking ID)
+    if (preg_match('/Booking\s+ID\s*[:|\s]+([A-Z0-9]+)/i', $cleanText, $match)) {
+        $data['guest_id'] = trim($match[1]);
+    }
+    
+    Log::info("📊 Malaysia Fallback extracted: " . json_encode($data));
+    return $data;
 }
 /**
  * ✅ Detect currency from text
@@ -1871,20 +2025,95 @@ protected function extractWithOpenAI($content, $folderName, $invoiceNumber)
 {
     try {
         $openAI = app(\App\Services\OpenAIService::class);
-         $isLK = false;
-        if (stripos($content, 'Tour Ref') !== false && 
-            (stripos($content, 'IS') !== false || 
-             stripos($content, 'Pick Your Trails') !== false ||
-             stripos($content, 'SL Share Drive') !== false)) {
-            $isLK = true;
-        }
-          $totalResult = $openAI->extractTotalTourCostOnly($content);
+        
+        // ✅ DETECT MALAYSIA
+        $isMalaysia = (stripos($content, 'RM') !== false || 
+                      stripos($content, 'MYR') !== false ||
+                      stripos($folderName, 'MY') !== false ||
+                      stripos($content, 'Kuala lumpur') !== false ||
+                      stripos($content, 'Malaysia') !== false);
+        
+        // ✅ DETECT VIETNAM
+        $isVietnam = (stripos($content, 'VN') !== false || 
+                      stripos($folderName, 'VN') !== false ||
+                      stripos($content, 'Vietnam') !== false ||
+                      stripos($content, 'Danang') !== false ||
+                      stripos($content, 'Hanoi') !== false ||
+                      stripos($content, 'Da Nang') !== false);
+        
+        // ✅ DETECT SRI LANKA
+        $isLK = (stripos($content, 'Tour Ref') !== false && 
+                 (stripos($content, 'IS') !== false || 
+                  stripos($content, 'Pick Your Trails') !== false ||
+                  stripos($content, 'SL Share Drive') !== false));
+        
+        // ✅ Get total amount first
+        $totalResult = $openAI->extractTotalTourCostOnly($content);
         $totalAmount = null;
-        $currency = 'USD';
-         if ($totalResult['success'] && isset($totalResult['data']['total_amount'])) {
+        $currency = 'MYR';
+        
+        if ($totalResult['success'] && isset($totalResult['data']['total_amount'])) {
             $totalAmount = $totalResult['data']['total_amount'];
-            $currency = $totalResult['data']['currency'] ?? 'USD';
+            $currency = $totalResult['data']['currency'] ?? 'MYR';
             Log::info("💰 OpenAI extracted total_amount: {$totalAmount} {$currency}");
+        }
+        
+        // ✅ For MALAYSIA - use specific extraction
+        if ($isMalaysia) {
+            Log::info("🔍 Detected Malaysia format for: {$invoiceNumber}");
+            $result = $openAI->extractMalaysiaTCData($content, $invoiceNumber, $folderName);
+            
+            if ($result['success'] && !empty($result['data'])) {
+                $data = $result['data'];
+                if ($totalAmount !== null) {
+                    $data['total_amount'] = $totalAmount;
+                    $data['currency'] = 'MYR';
+                }
+                $data['invoice_number'] = $invoiceNumber;
+                $data['folder_name'] = $folderName;
+                
+                Log::info("📊 Malaysia Final extracted data: " . json_encode($data));
+                return $data;
+            }
+            
+            // ✅ FALLBACK: Use regex for Malaysia
+            Log::warning("⚠️ OpenAI Malaysia extraction failed, using regex fallback");
+            $data = $this->extractMalaysiaTCDataRegex($content, $folderName, $invoiceNumber);
+            if ($totalAmount !== null) {
+                $data['total_amount'] = $totalAmount;
+            }
+            $data['invoice_number'] = $invoiceNumber;
+            $data['folder_name'] = $folderName;
+            return $data;
+        }
+        
+        // ✅ For VIETNAM - use specific extraction
+        if ($isVietnam) {
+            Log::info("🔍 Detected Vietnam format for: {$invoiceNumber}");
+            $result = $openAI->extractVietnamTCData($content, $invoiceNumber, $folderName);
+            
+            if ($result['success'] && !empty($result['data'])) {
+                $data = $result['data'];
+                if ($totalAmount !== null) {
+                    $data['total_amount'] = $totalAmount;
+                    $data['currency'] = 'USD';
+                }
+                $data['invoice_number'] = $invoiceNumber;
+                $data['folder_name'] = $folderName;
+                
+                Log::info("📊 Vietnam Final extracted data: " . json_encode($data));
+                return $data;
+            }
+            
+            // ✅ FALLBACK: Use regex for Vietnam
+            Log::warning("⚠️ OpenAI Vietnam extraction failed, using regex fallback");
+            $data = $this->extractVietnamDataRegex($content, $folderName, $invoiceNumber);
+            if ($totalAmount !== null) {
+                $data['total_amount'] = $totalAmount;
+            }
+            $data['invoice_number'] = $invoiceNumber;
+            $data['folder_name'] = $folderName;
+            return $data;
         }
         
         // ✅ For LK, use specific extraction
@@ -1894,10 +2123,9 @@ protected function extractWithOpenAI($content, $folderName, $invoiceNumber)
             
             if ($result['success'] && !empty($result['data'])) {
                 $data = $result['data'];
-                // ✅ OVERRIDE total_amount with OpenAI result
                 if ($totalAmount !== null) {
                     $data['total_amount'] = $totalAmount;
-                    $data['currency'] = $currency;
+                    $data['currency'] = 'USD';
                 }
                 $data['invoice_number'] = $invoiceNumber;
                 $data['folder_name'] = $folderName;
@@ -1906,15 +2134,21 @@ protected function extractWithOpenAI($content, $folderName, $invoiceNumber)
                 return $data;
             }
         }
-        // ✅ NEW: Use the full extraction method
+        
+        // ✅ General extraction (fallback)
         $result = $openAI->extractTCDataFull($content, $invoiceNumber, $folderName);
         
         if ($result['success'] && !empty($result['data'])) {
             $data = $result['data'];
-            // ✅ OVERRIDE total_amount with OpenAI result
             if ($totalAmount !== null) {
                 $data['total_amount'] = $totalAmount;
-                $data['currency'] = $currency;
+                if ($isMalaysia) {
+                    $data['currency'] = 'MYR';
+                } elseif ($isVietnam) {
+                    $data['currency'] = 'USD';
+                } else {
+                    $data['currency'] = $currency;
+                }
             }
             $data['invoice_number'] = $invoiceNumber;
             $data['folder_name'] = $folderName;
@@ -1923,79 +2157,207 @@ protected function extractWithOpenAI($content, $folderName, $invoiceNumber)
             return $data;
         }
         
-        Log::warning("⚠️ OpenAI full extraction failed for: {$invoiceNumber}, trying basic...");
-        
-        // ✅ Fallback: Try basic extraction
-        $result2 = $openAI->extractTCData($content, $invoiceNumber, $folderName);
-        if ($result2['success'] && !empty($result2['data'])) {
-            $data = $result2['data'];
-            $data['invoice_number'] = $invoiceNumber;
-            $data['folder_name'] = $folderName;
-            return $data;
-        }
+        // ✅ Final fallback: Regex
+        return [
+            'tour_ref' => $invoiceNumber,
+            'agent_name' => null,
+            'arrival_date' => null,
+            'departure_date' => null,
+            'total_amount' => $this->extractTotalAmountFromText($content),
+            'currency' => 'MYR',
+            'invoice_number' => $invoiceNumber,
+            'folder_name' => $folderName,
+            'hotels' => [],
+            'transport_items' => [],
+            'meal_items' => [],
+        ];
         
     } catch (\Exception $e) {
         Log::error("OpenAI extraction failed: " . $e->getMessage());
+        
+        return [
+            'tour_ref' => $invoiceNumber,
+            'agent_name' => null,
+            'arrival_date' => null,
+            'departure_date' => null,
+            'total_amount' => 0,
+            'currency' => 'MYR',
+            'invoice_number' => $invoiceNumber,
+            'folder_name' => $folderName,
+        ];
     }
-    
-    // ✅ Final fallback: Regex
-    return [
+}
+/**
+ * ✅ Extract Malaysia TC Data using Regex - FALLBACK
+ */
+protected function extractMalaysiaTCDataRegex($text, $folderName, $invoiceNumber)
+{
+    $data = [
         'tour_ref' => null,
         'agent_name' => null,
+        'file_handler' => null,
+        'sales_person' => null,
+        'guest_id' => null,
+        'guest_name' => null,
+        'guest_count' => 1,
         'arrival_date' => null,
         'departure_date' => null,
-        'total_amount' => $this->extractTotalAmountFromText($content),
-        'currency' => $this->extractCurrencyFromText($content),
-        'invoice_number' => $invoiceNumber,
-        'folder_name' => $folderName,
-        'hotels' => [],
-        'transport_items' => [],
-        'meal_items' => [],
+        'nights' => null,
+        'hotel_name' => null,
+        'city' => null,
+        'meal_plan' => null,
+        'total_amount' => 0,
+        'currency' => 'MYR'
     ];
+    
+    $cleanText = preg_replace('/\s+/', ' ', $text);
+    
+    // ✅ Extract Total Tour Cost - MULTIPLE PATTERNS
+    $patterns = [
+        '/Total\s+Tour\s+Cost\s*(?:USD|MYR|RM)?\s*([\d,]+\.\d{2})/i',
+        '/Total\s+Tour\s+Cost\s*\$?\s*([\d,]+\.\d{2})/i',
+        '/Total\s+Tour\s+Cost\s*([\d,]+\.\d{2})/i',
+    ];
+    
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $cleanText, $match)) {
+            $data['total_amount'] = floatval(str_replace(',', '', $match[1]));
+            Log::info("💰 Regex found Total Amount: {$data['total_amount']}");
+            break;
+        }
+    }
+    
+    // ✅ If still 0, try to find any USD amount
+    if ($data['total_amount'] == 0) {
+        if (preg_match('/\$\s*([\d,]+\.\d{2})/', $cleanText, $match)) {
+            $data['total_amount'] = floatval(str_replace(',', '', $match[1]));
+            Log::info("💰 Regex found dollar amount: {$data['total_amount']}");
+        }
+    }
+    
+    // ✅ Extract other fields
+    if (preg_match('/Tour\s+Ref\s*[:|\s]+([A-Z0-9]+)/i', $cleanText, $match)) {
+        $data['tour_ref'] = trim($match[1]);
+    }
+    
+    if (preg_match('/File\s+Handler\s*[:|\s]+([^\n,]+)/i', $cleanText, $match)) {
+        $data['file_handler'] = trim($match[1]);
+        $data['sales_person'] = $data['file_handler'];
+    }
+    
+    if (preg_match('/Agent\s*[:|\s]+([^\n,]+)/i', $cleanText, $match)) {
+        $agent = trim($match[1]);
+        if (strlen($agent) < 30) {
+            $data['agent_name'] = $agent;
+        }
+    }
+    
+    if (preg_match('/Guests?\s+Name\s*[:|\s]+([^\n,]+)/i', $cleanText, $match)) {
+        $data['guest_name'] = trim($match[1]);
+    }
+    
+    if (preg_match('/No\.?\s*of\s*Guests?\s*[:|\s]+(\d+)\s*Adults?/i', $cleanText, $match)) {
+        $data['guest_count'] = intval($match[1]);
+    }
+    
+    if (preg_match('/Arrival\s+Date\s*[:|\s]+(\d{1,2})\s+([A-Za-z]{3,}),?\s*(\d{4})/i', $cleanText, $match)) {
+        $day = intval($match[1]);
+        $month = $this->getMonthNumber($match[2]);
+        $year = intval($match[3]);
+        if ($month) {
+            $data['arrival_date'] = sprintf("%04d-%02d-%02d", $year, $month, $day);
+        }
+    }
+    
+    if (preg_match('/Departure\s+Date\s*[:|\s]+(\d{1,2})\s+([A-Za-z]{3,}),?\s*(\d{4})/i', $cleanText, $match)) {
+        $day = intval($match[1]);
+        $month = $this->getMonthNumber($match[2]);
+        $year = intval($match[3]);
+        if ($month) {
+            $data['departure_date'] = sprintf("%04d-%02d-%02d", $year, $month, $day);
+        }
+    }
+    
+    if (preg_match('/Booking\s+ID\s*[:|\s]+([A-Z0-9]+)/i', $cleanText, $match)) {
+        $data['guest_id'] = trim($match[1]);
+    }
+    
+    // Calculate nights
+    if ($data['arrival_date'] && $data['departure_date']) {
+        $start = strtotime($data['arrival_date']);
+        $end = strtotime($data['departure_date']);
+        if ($start && $end) {
+            $data['nights'] = round(($end - $start) / (60 * 60 * 24));
+        }
+    }
+    
+    Log::info("📊 Malaysia Regex extracted: " . json_encode($data));
+    return $data;
 }
-
-/**
- * ✅ Extract total amount using regex - SEARCH BOTH TEXT AND TABLES
- */
 protected function extractTotalAmountFromText($text)
 {
-    // Pattern 1: "Total Tour Cost $ 900.00" (with space after $)
-    if (preg_match('/Total\s+Tour\s+Cost\s*[:]?\s*\$?\s*([0-9,]+\.\d{2})/i', $text, $match)) {
-        return floatval(str_replace(',', '', $match[1]));
+    $cleanText = preg_replace('/\s+/', ' ', $text);
+    $cleanText = str_replace("\n", ' ', $cleanText);
+    
+    Log::info("🔍 Searching for Total Tour Cost in text length: " . strlen($cleanText));
+    
+    // ✅ Try ALL possible patterns
+    $patterns = [
+        '/Total\s+Tour\s+Cost\s*(?:USD|MYR|RM)?\s*([\d,]+\.\d{2})/i',
+        '/Total\s+Tour\s+Cost\s*\$?\s*([\d,]+\.\d{2})/i',
+        '/Total\s+Tour\s+Cost\s*([\d,]+\.\d{2})/i',
+        '/Total\s+Tour\s+Cost.*?([\d,]+\.\d{2})/is',
+        '/Total\s+Tour\s+Cost.*?(?:USD|MYR|RM)?\s*([\d,]+\.\d{2})/is',
+        '/\[Total\s+Tour\s+Cost\].*?([\d,]+\.\d{2})/is',
+        '/\[USD\s+([\d,]+\.\d{2})\]/i',
+        '/\*\*Total Tour Cost\*\*.*?([\d,]+\.\d{2})/is',
+    ];
+    
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $cleanText, $match)) {
+            $amount = floatval(str_replace(',', '', $match[1]));
+            if ($amount > 0) {
+                Log::info("💰 Found Total Tour Cost: {$amount}");
+                return $amount;
+            }
+        }
     }
     
-    // Pattern 2: "$ 900.00" standalone
-    if (preg_match('/\$\s*([0-9,]+\.\d{2})/', $text, $match)) {
-        return floatval(str_replace(',', '', $match[1]));
+    // ✅ Fallback: Find any USD amount that is likely the total
+    if (preg_match_all('/USD\s*([\d,]+\.\d{2})/i', $cleanText, $matches)) {
+        $amounts = array_map(function($val) {
+            return floatval(str_replace(',', '', $val));
+        }, $matches[1]);
+        
+        $amounts = array_filter($amounts, function($val) {
+            return $val > 10;
+        });
+        
+        if (!empty($amounts)) {
+            $max = max($amounts);
+            Log::info("💰 Found largest USD amount: {$max}");
+            return $max;
+        }
     }
     
-    // Pattern 3: "Total Tour Cost $1,041.12"
-    if (preg_match('/Total\s+Tour\s+Cost\s*[:]?\s*\$([0-9,]+\.\d{2})/i', $text, $match)) {
-        return floatval(str_replace(',', '', $match[1]));
+    // ✅ Fallback: Find any dollar amount
+    if (preg_match_all('/\$\s*([\d,]+\.\d{2})/', $cleanText, $matches)) {
+        $amounts = array_map(function($val) {
+            return floatval(str_replace(',', '', $val));
+        }, $matches[1]);
+        
+        $amounts = array_filter($amounts, function($val) {
+            return $val > 10;
+        });
+        
+        if (!empty($amounts)) {
+            $max = max($amounts);
+            Log::info("💰 Found largest dollar amount: {$max}");
+            return $max;
+        }
     }
     
-    // Pattern 4: Table format - Look for "Total Tour Cost" in table
-    // Example: "| Total Tour Cost | $ 900.00 |"
-    if (preg_match('/Total\s+Tour\s+Cost\s*\|\s*\$?\s*([0-9,]+\.\d{2})/i', $text, $match)) {
-        return floatval(str_replace(',', '', $match[1]));
-    }
-    
-    // Pattern 5: Table format with multiple columns
-    // Example: "| Total Tour Cost | $1,041.12 |"
-    if (preg_match('/Total\s+Tour\s+Cost\s*\|\s*\$?\s*([0-9,]+\.\d{2})\s*\|/i', $text, $match)) {
-        return floatval(str_replace(',', '', $match[1]));
-    }
-    
-    // Pattern 6: "$900.00" at the end
-    if (preg_match('/\$\s*([0-9,]+\.\d{2})\s*$/', $text, $match)) {
-        return floatval(str_replace(',', '', $match[1]));
-    }
-    
-    // Pattern 7: "900.00 USD"
-    if (preg_match('/([\d,]+\.\d{2})\s*(USD|MYR|SGD)/i', $text, $match)) {
-        return floatval(str_replace(',', '', $match[1]));
-    }
-    
+    Log::warning("⚠️ No Total Tour Cost found in text");
     return 0;
 }
 /**
@@ -2133,22 +2495,21 @@ protected function createPnLRecord($data, $import)
             $totalAmount = $this->extractTotalAmountFromText($tcContent);
         }
         
-        $currency = $data['currency'] ?? 'USD';
-        if ($import->country_code == 'MY' && $currency == 'USD') {
-            // Check if there's MYR in the content
+  $currency = $data['currency'] ?? 'USD';
+        
+        if ($import->country_code == 'MY') {
             $tcContent = $import->tc_file_content ?? '';
             if (stripos($tcContent, 'RM') !== false || stripos($tcContent, 'MYR') !== false) {
                 $currency = 'MYR';
-                Log::info("💰 Currency corrected to MYR for Malaysia");
+            } else {
+                $currency = 'MYR'; // Default for Malaysia
             }
-        }
-          if ($import->country_code == 'LK') {
-            $currency = 'USD';
-        }
-        
-        // For Vietnam, always USD
-        if ($import->country_code == 'VN') {
-            $currency = 'USD';
+        } elseif ($import->country_code == 'VN') {
+            $currency = 'USD'; // Vietnam always USD
+        } elseif ($import->country_code == 'LK') {
+            $currency = 'USD'; // Sri Lanka always USD
+        } elseif ($import->country_code == 'SG') {
+            $currency = 'SGD'; // Singapore always SGD
         }
         Log::info("💰 Final Total Amount for {$import->invoice_number}: {$totalAmount}");
         
@@ -3207,5 +3568,162 @@ protected function extractLKOtherRates($text)
     }
 
     return $items;
+}
+/**
+ * ✅ Extract Vietnam data using regex - FALLBACK for complex documents
+ */
+protected function extractVietnamDataRegex($content, $folderName, $invoiceNumber)
+{
+    $data = [
+        'tour_ref' => $invoiceNumber,
+        'agent_name' => null,
+        'file_handler' => null,
+        'sales_person' => null,
+        'guest_id' => null,
+        'guest_name' => null,
+        'guest_count' => 1,
+        'arrival_date' => null,
+        'departure_date' => null,
+        'nights' => null,
+        'hotel_name' => null,
+        'city' => null,
+        'meal_plan' => null,
+        'total_amount' => 0,
+        'currency' => 'USD',
+        'confirmation_number' => null,
+        'flight_details' => []
+    ];
+    
+    // Clean content
+    $cleanContent = preg_replace('/\s+/', ' ', $content);
+    $cleanContent = str_replace("\n", ' ', $cleanContent);
+    
+    // 1. ✅ Extract Total Tour Cost
+    if (preg_match('/Total\s+Tour\s+Cost\s*USD?\s*([\d,]+\.\d{2})/i', $cleanContent, $match)) {
+        $data['total_amount'] = floatval(str_replace(',', '', $match[1]));
+        Log::info("💰 Found Total Tour Cost: {$data['total_amount']} USD");
+    } elseif (preg_match('/Total\s+Tour\s+Cost\s*\$?\s*([\d,]+\.\d{2})/i', $cleanContent, $match)) {
+        $data['total_amount'] = floatval(str_replace(',', '', $match[1]));
+        Log::info("💰 Found Total Tour Cost: {$data['total_amount']} USD");
+    } elseif (preg_match('/Total\s+Tour\s+Cost\s*USD?\s*([\d,]+)/i', $cleanContent, $match)) {
+        $data['total_amount'] = floatval(str_replace(',', '', $match[1]));
+        Log::info("💰 Found Total Tour Cost: {$data['total_amount']} USD");
+    }
+    
+    // 2. ✅ Extract File Handler
+    if (preg_match('/File\s+Handler\s*[:|\s]+([^\n,]+)/i', $cleanContent, $match)) {
+        $data['file_handler'] = trim($match[1]);
+        $data['sales_person'] = $data['file_handler'];
+        Log::info("👤 Found File Handler: {$data['file_handler']}");
+    }
+    
+    // If file handler not found, try from folder name
+    if (!$data['file_handler']) {
+        $fileHandler = $this->extractFileHandlerFromFolderName($folderName);
+        if ($fileHandler) {
+            $data['file_handler'] = $fileHandler;
+            $data['sales_person'] = $fileHandler;
+            Log::info("👤 File Handler from folder: {$fileHandler}");
+        }
+    }
+    
+    // 3. ✅ Extract Agent Name
+    if (preg_match('/Agent\s*[:|\s]+([^\n,]+)/i', $cleanContent, $match)) {
+        $agent = trim($match[1]);
+        if (strlen($agent) < 30) {
+            $data['agent_name'] = $agent;
+            Log::info("🏢 Found Agent: {$data['agent_name']}");
+        }
+    }
+    
+    // 4. ✅ Extract Guest ID (MMT Booking ID)
+    if (preg_match('/MMT\s*[-]\s*Booking\s*ID\s*[:|\s]+([A-Z0-9]+)/i', $cleanContent, $match)) {
+        $data['guest_id'] = trim($match[1]);
+        Log::info("🆔 Found MMT Booking ID: {$data['guest_id']}");
+    }
+    
+    // 5. ✅ Extract Confirmation Number
+    if (preg_match('/Confirmation\s+Number\s*[:|\s]+([A-Z0-9]+)/i', $cleanContent, $match)) {
+        $data['confirmation_number'] = trim($match[1]);
+        $data['tour_ref'] = $data['confirmation_number'];
+        Log::info("📋 Found Confirmation Number: {$data['confirmation_number']}");
+    }
+    
+    // 6. ✅ Extract Guest Name
+    if (preg_match('/Guests?\s+Name\s*[:|\s]+([^\n,]+)/i', $cleanContent, $match)) {
+        $data['guest_name'] = trim($match[1]);
+        Log::info("👤 Found Guest Name: {$data['guest_name']}");
+    } elseif (preg_match('/Lead\s+Passenger\s+Name\s*[:|\s]+([^\n,]+)/i', $cleanContent, $match)) {
+        $data['guest_name'] = trim($match[1]);
+        Log::info("👤 Found Lead Passenger: {$data['guest_name']}");
+    }
+    
+    // 7. ✅ Extract Guest Count
+    if (preg_match('/Total\s+Passenger\s*[:|\s]+(\d+)\s*Adults?/i', $cleanContent, $match)) {
+        $data['guest_count'] = intval($match[1]);
+        Log::info("👥 Found Guest Count: {$data['guest_count']}");
+    } elseif (preg_match('/No\.?\s*of\s*Guests?\s*[:|\s]+(\d+)\s*Adults?/i', $cleanContent, $match)) {
+        $data['guest_count'] = intval($match[1]);
+        Log::info("👥 Found Guest Count: {$data['guest_count']}");
+    }
+    
+    // 8. ✅ Extract Arrival Date
+    if (preg_match('/Arrival\s+Date\s*[:|\s]+(\d{1,2})\s+([A-Za-z]{3}),?\s*(\d{4})/i', $cleanContent, $match)) {
+        $day = intval($match[1]);
+        $month = $this->getMonthNumber($match[2]);
+        $year = intval($match[3]);
+        if ($month) {
+            $data['arrival_date'] = sprintf("%04d-%02d-%02d", $year, $month, $day);
+            Log::info("📅 Found Arrival Date: {$data['arrival_date']}");
+        }
+    }
+    
+    // 9. ✅ Extract Departure Date
+    if (preg_match('/Departure\s+Date\s*[:|\s]+(\d{1,2})\s+([A-Za-z]{3}),?\s*(\d{4})/i', $cleanContent, $match)) {
+        $day = intval($match[1]);
+        $month = $this->getMonthNumber($match[2]);
+        $year = intval($match[3]);
+        if ($month) {
+            $data['departure_date'] = sprintf("%04d-%02d-%02d", $year, $month, $day);
+            Log::info("📅 Found Departure Date: {$data['departure_date']}");
+        }
+    }
+    
+    // 10. ✅ Calculate Nights
+    if ($data['arrival_date'] && $data['departure_date']) {
+        $start = strtotime($data['arrival_date']);
+        $end = strtotime($data['departure_date']);
+        if ($start && $end) {
+            $data['nights'] = round(($end - $start) / (60 * 60 * 24));
+            Log::info("🌙 Calculated Nights: {$data['nights']}");
+        }
+    }
+    
+    // 11. ✅ Extract Hotel Names (first hotel from the list)
+    // Pattern: City name followed by Hotel name
+    if (preg_match('/Hanoi\s+([A-Za-z\s\-]+Hotel\s+[A-Za-z\s\-]+)/i', $cleanContent, $match)) {
+        $data['hotel_name'] = trim($match[1]);
+        $data['city'] = 'Hanoi';
+        Log::info("🏨 Found Hotel: {$data['hotel_name']} in {$data['city']}");
+    } elseif (preg_match('/Da\s+Nang\s+([A-Za-z\s\-]+Hotel\s+[A-Za-z\s\-]+)/i', $cleanContent, $match)) {
+        $data['hotel_name'] = trim($match[1]);
+        $data['city'] = 'Da Nang';
+        Log::info("🏨 Found Hotel: {$data['hotel_name']} in {$data['city']}");
+    } elseif (preg_match('/Ho\s+Chi\s+Minh\s+City\s+([A-Za-z\s\-]+Hotel\s+[A-Za-z\s\-]+)/i', $cleanContent, $match)) {
+        $data['hotel_name'] = trim($match[1]);
+        $data['city'] = 'Ho Chi Minh City';
+        Log::info("🏨 Found Hotel: {$data['hotel_name']} in {$data['city']}");
+    }
+    
+    // 12. ✅ Extract City (if not found from hotel)
+    if (!$data['city']) {
+        if (preg_match('/\b(Hanoi|Da Nang|Ho Chi Minh City|HCMC|Danang)\b/i', $cleanContent, $match)) {
+            $data['city'] = trim($match[1]);
+            Log::info("📍 Found City: {$data['city']}");
+        }
+    }
+    
+    Log::info("📊 Vietnam Regex extracted: " . json_encode($data));
+    return $data;
 }
 }
