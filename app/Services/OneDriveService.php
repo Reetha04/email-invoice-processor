@@ -650,7 +650,19 @@ protected function createPnlRecordFromPNL($pnlFile, $folderPath, $folderName, $i
     $totalAmount = $this->extractTotalAmountFromPNL($text);
     $pax = $this->extractPaxFromPNL($text);
     $nights = $this->extractNightsFromPNL($text);
-    
+     $agentName = $data['agent_name'] ?? null;
+        if (empty($agentName)) {
+            // Try to get from folder name
+            $agentName = $this->extractFileHandlerFromFolderName($import->folder_name);
+        }
+        if (empty($agentName)) {
+            $agentName = 'Unknown Agent'; // ✅ DEFAULT VALUE
+        }
+        
+        $guestName = $data['guest_name'] ?? null;
+        if (empty($guestName)) {
+            $guestName = 'Unknown Guest'; // ✅ DEFAULT VALUE
+        }
     // Create record
     $record = PnlRecord::create([
         'invoice_number' => $invoiceNumber,

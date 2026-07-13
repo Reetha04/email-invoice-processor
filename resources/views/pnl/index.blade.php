@@ -275,6 +275,11 @@
                 <button type="button" id="downloadSelectedBtn" class="btn-pnl btn-pnl-success" disabled>
                     <i class="fas fa-download me-2"></i> Download Selected (<span id="selectedCount">0</span>)
                 </button>
+                <button type="button" id="downloadAllFilteredBtn" 
+    class="btn-pnl btn-pnl-primary" 
+    onclick="exportAllFiltered()">
+    <i class="fas fa-download me-2"></i> Export All Filtered
+</button>
                 <div class="dropdown">
                     <button class="btn-pnl btn-pnl-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
                         <i class="fas fa-file-export me-2"></i> Export
@@ -2008,6 +2013,56 @@ function removeFilter(element) {
         }
     }
     form.submit();
+}
+// Add this function to your JavaScript
+function exportAllFiltered() {
+    const params = new URLSearchParams(window.location.search);
+    const btn = $('#downloadAllFilteredBtn');
+    const originalHtml = btn.html();
+    
+    btn.html('<i class="fas fa-spinner fa-spin me-1"></i> Exporting...').prop('disabled', true);
+    
+    $.ajax({
+        url: '{{ route('pnl.export.selected') }}',
+        method: 'POST',
+        data: {
+            export_all: true,
+            search: params.get('search') || '',
+            category: params.get('category') || '',
+            country: params.get('country') || '',
+            status: params.get('status') || '',
+            date_from: params.get('date_from') || '',
+            date_to: params.get('date_to') || '',
+            travel_date_from: params.get('travel_date_from') || '',
+            travel_date_to: params.get('travel_date_to') || '',
+            _token: '{{ csrf_token() }}'
+        },
+        xhrFields: {
+            responseType: 'blob'
+        },
+        success: function(response) {
+            const url = window.URL.createObjectURL(new Blob([response]));
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', 'pnl_export_all_filtered_' + new Date().toISOString().slice(0,10) + '.xlsx');
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+            toastr.success('✅ All filtered records exported successfully!');
+        },
+        error: function(xhr) {
+            let errorMsg = 'Export failed';
+            try {
+                const response = JSON.parse(xhr.responseText);
+                errorMsg = response.message || errorMsg;
+            } catch (e) {}
+            toastr.error(errorMsg);
+        },
+        complete: function() {
+            btn.html(originalHtml).prop('disabled', false);
+        }
+    });
 }
 </script>
 @endpush

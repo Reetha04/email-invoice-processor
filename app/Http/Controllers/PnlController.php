@@ -225,10 +225,12 @@ class PnlController extends Controller
             ], 500);
         }
     }
-    
 public function exportToExcel(Request $request)
 {
     try {
+        // ✅ Set longer timeout
+        set_time_limit(300); // 5 minutes
+        
         $query = PnlRecord::with('items');
         
         // Apply filters
@@ -262,19 +264,36 @@ public function exportToExcel(Request $request)
             $query->whereDate('received_at', '<=', $request->date_to);
         }
         
-        $records = $query->orderBy('received_at', 'desc')->get();
+        // Travel date filters
+        if ($request->filled('travel_date_from')) {
+            $from = $request->travel_date_from;
+            $query->whereHas('items', function($q) use ($from) {
+                $q->where('type', 'HOTEL')->whereDate('check_in_date', '>=', $from);
+            });
+        }
+        if ($request->filled('travel_date_to')) {
+            $to = $request->travel_date_to;
+            $query->whereHas('items', function($q) use ($to) {
+                $q->where('type', 'HOTEL')->whereDate('check_out_date', '<=', $to);
+            });
+        }
         
-        if ($records->isEmpty()) {
+        // ✅ IMPORTANT: Get count first
+        $totalRecords = $query->count();
+        
+        if ($totalRecords == 0) {
             return redirect()->back()->with('error', 'No records found to export.');
         }
- $records = $this->getLatestPnLRecords($records);
+        
+        // ✅ Create spreadsheet
         $filename = "pnl_export_" . date('Y-m-d_His') . ".xlsx";
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('PnL Details');
-$currencySymbol = $this->getCurrencySymbol($country ?? 'VN');
-        // ✅ UPDATED HEADERS WITH CLIENT NAME
-      $headers = [
+        $currencySymbol = $this->getCurrencySymbol($request->country ?? 'VN');
+        
+        // Headers WITH Start Date and End Date
+        $headers = [
             'A1' => 'S.No',
             'B1' => 'Tour Number',
             'C1' => 'Invoice Number',
@@ -282,23 +301,25 @@ $currencySymbol = $this->getCurrencySymbol($country ?? 'VN');
             'E1' => 'Agent Name',
             'F1' => 'Client Name',
             'G1' => 'Category',
-            'H1' => 'Description',
-            'I1' => 'Amount (USD)',
-            'J1' => 'Exchange Rate',
-            'K1' => 'Amount (' . $currencySymbol . ')',
-            'L1' => 'Remarks'
+            'H1' => 'Start Date',
+            'I1' => 'End Date',
+            'J1' => 'Description',
+            'K1' => 'Amount (USD)',
+            'L1' => 'Exchange Rate',
+            'M1' => 'Amount (' . $currencySymbol . ')',
+            'N1' => 'Remarks'
         ];
         
         foreach ($headers as $cell => $value) {
             $sheet->setCellValue($cell, $value);
         }
         
-      // ✅ CORRECT - Match headers (A to L)
-$sheet->getStyle('A1:L1')->applyFromArray([
-    'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
-    'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
-    'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER]
-]);
+        $sheet->getStyle('A1:N1')->applyFromArray([
+            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
+            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
+            'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER]
+        ]);
+        
         $colors = [
             'INVOICE' => 'D5E8D4', 'HOTEL' => 'FFF2CC', 'TRANSPORT' => 'DDEBF7',
             'TOUR TRANSFER' => 'E2EFDA', 'ATTRACTION' => 'FCE4D6', 'MEALS' => 'E1C699',
@@ -307,144 +328,150 @@ $sheet->getStyle('A1:L1')->applyFromArray([
 
         $row = 2;
         $globalSno = 1;
+        
+        // ✅ CHUNK the data - process in batches of 50
+        $chunkSize = 50;
+        
+        $query->orderBy('received_at', 'desc')->chunk($chunkSize, function($records) use (
+            &$sheet, &$row, &$globalSno, $colors
+        ) {
+            // ✅ Get latest revisions for this chunk
+            $records = $this->getLatestPnLRecords($records);
+            
+            foreach ($records as $record) {
+                $exchangeRate = $record->exchange_rate_used ?? 1;
+                $tourRef = $record->tour_ref;
+                $invoiceNumber = $record->invoice_number;
+                $agentName = $record->agent_name;
+                $items = $record->items;
+                
+                if ($items->isEmpty()) {
+                    $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                    $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                    $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                    
+                    $sheet->setCellValue("A{$row}", $globalSno++);
+                    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                    $sheet->setCellValue("D{$row}", 'Credit');
+                    $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                    $sheet->setCellValue("F{$row}", $record->vendor_name ?? '');
+                    $sheet->setCellValue("G{$row}", 'INVOICE');
+                    $sheet->setCellValue("H{$row}", $startDate);
+                    $sheet->setCellValue("I{$row}", $endDate);
+                    $sheet->setCellValue("J{$row}", 'INVOICE');
+                    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($record->amount));
+                    $sheet->setCellValue("L{$row}", $exchangeRate);
+                    $sheet->setCellValue("M{$row}", $this->formatAmountForExport($record->amount * $exchangeRate));
+                    $sheet->setCellValue("N{$row}", $remarks);
+                    
+                    if (isset($colors['INVOICE'])) {
+                        $sheet->getStyle("A{$row}:N{$row}")->getFill()
+                            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                            ->getStartColor()->setRGB($colors['INVOICE']);
+                    }
+                    $row++;
+                } else {
+                    foreach ($items as $item) {
+                        $remarks = '';
+                        $itemDetails = json_decode($item->item_details, true);
+                        
+                        $description = $item->service_name ?? $item->type;
+                        if ($item->type == 'HOTEL' && empty($description)) {
+                            $description = $item->hotel_name ?? $item->type;
+                        }
+                        
+                        $amount = $item->amount_original;
+                        $startDate = $item->start_date ?? $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                        $endDate = $item->end_date ?? $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
 
-        foreach ($records as $record) {
-            $exchangeRate = $record->exchange_rate_used ?? 1;
-            $tourRef = $record->tour_ref;
-            $invoiceNumber = $record->invoice_number;
-            $agentName = $record->agent_name;
-            
-            $items = $record->items;
-            
-            if ($items->isEmpty()) {
-                $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-                $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-                
-                $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
-                
-                $sheet->setCellValue("A{$row}", '');
-        $sheet->setCellValue("B{$row}", $tourRef ?? '-');
-        $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-        $sheet->setCellValue("D{$row}", '');  // Agent Type - blank
-        $sheet->setCellValue("E{$row}", $agentName ?? '-');  // Agent Name
-        $sheet->setCellValue("F{$row}", '');  // Client Name - blank
-        $sheet->setCellValue("G{$row}", 'PROFIT / (LOSS)');  // Category
-        $sheet->setCellValue("H{$row}", '');  // Description - blank
-        $sheet->setCellValue("I{$row}", $this->formatAmountForExport($pl));  // Amount
-        $sheet->setCellValue("J{$row}", $exchangeRate);  // Exchange Rate
-        $sheet->setCellValue("K{$row}", $this->formatAmountForExport($pl * $exchangeRate)); // Local
-        $sheet->setCellValue("L{$row}", $pl >= 0 ? 'Profit' : 'Loss'); // Remarks
-                
-                if (isset($colors['INVOICE'])) {
-                    $sheet->getStyle("A{$row}:L{$row}")->applyFromArray([
-            'font' => ['bold' => true],
-            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FFF3CD']]
-        ]);
+                        if ($item->type == 'INVOICE') {
+                            $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                            $description = 'INVOICE';
+                            $amount = $record->amount;
+                        } else {
+                            $amount = -abs($amount);
+                            if ($item->type == 'HOTEL') {
+                                $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+                            } elseif ($item->type == 'ATTRACTION') {
+                                $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
+                            } elseif ($item->type == 'TOUR TRANSFER') {
+                                $remarks = $itemDetails['remarks'] ?? 'Tour transfer';
+                            } elseif ($item->type == 'TRANSPORT') {
+                                $remarks = $itemDetails['remarks'] ?? 'Transport expenses';
+                            } elseif ($item->type == 'MEALS') {
+                                $remarks = 'Meals expenses';
+                            } elseif ($item->type == 'OTHER RATES') {
+                                $remarks = $itemDetails['remarks'] ?? 'Other fees';
+                            }
+                        }
+
+                        $sheet->setCellValue("A{$row}", $globalSno++);
+                        $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                        $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                        $sheet->setCellValue("D{$row}", $item->credit_type ?? 'Credit');
+                        $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                        $sheet->setCellValue("F{$row}", $item->client_name ?? $record->vendor_name ?? '');
+                        $sheet->setCellValue("G{$row}", $item->type);
+                        $sheet->setCellValue("H{$row}", $startDate);
+                        $sheet->setCellValue("I{$row}", $endDate);
+                        $sheet->setCellValue("J{$row}", $description);
+                        $sheet->setCellValue("K{$row}", $this->formatAmountForExport($amount));
+                        $sheet->setCellValue("L{$row}", $exchangeRate);
+                        $sheet->setCellValue("M{$row}", $this->formatAmountForExport($amount * $exchangeRate));
+                        $sheet->setCellValue("N{$row}", $remarks);
+
+                        if (isset($colors[$item->type])) {
+                            $sheet->getStyle("A{$row}:N{$row}")->getFill()
+                                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                                ->getStartColor()->setRGB($colors[$item->type]);
+                        }
+                        
+                        $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([
+                            'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
+                        ]);
+                        
+                        $row++;
+                    }
                 }
+
+                // Profit/Loss Row
+                if ($record->profit_loss !== null) {
+                    $pl = $record->profit_loss;
+                    $sheet->setCellValue("A{$row}", '');
+                    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                    $sheet->setCellValue("D{$row}", '');
+                    $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                    $sheet->setCellValue("F{$row}", '');
+                    $sheet->setCellValue("G{$row}", 'PROFIT / (LOSS)');
+                    $sheet->setCellValue("H{$row}", '');
+                    $sheet->setCellValue("I{$row}", '');
+                    $sheet->setCellValue("J{$row}", '');
+                    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($pl));
+                    $sheet->setCellValue("L{$row}", $exchangeRate);
+                    $sheet->setCellValue("M{$row}", $this->formatAmountForExport($pl * $exchangeRate));
+                    $sheet->setCellValue("N{$row}", $pl >= 0 ? 'Profit from email' : 'Loss from email');
+
+                    $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([
+                        'font' => ['bold' => true],
+                        'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FFF3CD']]
+                    ]);
+                    $row++;
+                }
+
                 $row++;
-            } else {
-// ========== WRITE DATA ROWS ==========
-foreach ($items as $item) {
-    $remarks = '';
-    $itemDetails = json_decode($item->item_details, true);
-    
-    // Use service_name as description by default
-    $description = $item->service_name ?? $item->type;
-    
-    // For hotels, use hotel_name if available
-    if ($item->type == 'HOTEL' && empty($description)) {
-        $description = $item->hotel_name ?? $item->type;
-    }
-    
-    $amount = $item->amount_original;
-    
-    $startDate = $item->start_date ?? $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-    $endDate = $item->end_date ?? $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-
-    if ($item->type == 'INVOICE') {
-        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
-        $description = 'INVOICE';
-        $amount = $record->amount;  // Keep positive for INVOICE
-    } else {
-        $amount = -abs($amount);
-        if ($item->type == 'HOTEL') {
-            $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
-        } elseif ($item->type == 'ATTRACTION') {
-            $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
-        } elseif ($item->type == 'TOUR TRANSFER') {
-            $remarks = $itemDetails['remarks'] ?? 'Tour transfer';
-        } elseif ($item->type == 'TRANSPORT') {
-            $remarks = $itemDetails['remarks'] ?? 'Transport expenses';
-        } elseif ($item->type == 'MEALS') {
-            $remarks = 'Meals expenses';
-        } elseif ($item->type == 'OTHER RATES') {
-            $remarks = $itemDetails['remarks'] ?? 'Other fees';
-        }
-    }
-
-    // ✅ CORRECT COLUMN ORDER (A to L)
-    $sheet->setCellValue("A{$row}", $globalSno++);                                    // S.No
-    $sheet->setCellValue("B{$row}", $tourRef ?? '-');                                // Tour Number
-    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');                          // Invoice Number
-    $sheet->setCellValue("D{$row}", $item->credit_type ?? 'Credit');                // Agent Type
-    $sheet->setCellValue("E{$row}", $agentName ?? '-');                             // Agent Name
-    $sheet->setCellValue("F{$row}", $item->client_name ?? $record->vendor_name ?? ''); // Client Name
-    $sheet->setCellValue("G{$row}", $item->type);                                  // Category
-    $sheet->setCellValue("H{$row}", $description);                                 // Description
-    $sheet->setCellValue("I{$row}", $this->formatAmountForExport($amount));        // Amount (USD)
-    $sheet->setCellValue("J{$row}", $exchangeRate);                               // Exchange Rate
-    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($amount * $exchangeRate)); // Amount (Local)
-    $sheet->setCellValue("L{$row}", $remarks);                                   // Remarks
-
-    // Color coding - Range A:L
-    if (isset($colors[$item->type])) {
-        $sheet->getStyle("A{$row}:L{$row}")->getFill()
-            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-            ->getStartColor()->setRGB($colors[$item->type]);
-    }
-    
-    // Borders - Range A:L
-    $sheet->getStyle("A{$row}:L{$row}")->applyFromArray([
-        'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
-    ]);
-    
-    $row++;
-}
             }
+        });
 
-if ($record->profit_loss !== null) {
-    $pl = $record->profit_loss;
-    $sheet->setCellValue("A{$row}", '');
-    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
-    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-    $sheet->setCellValue("D{$row}", '');  // Agent Type - blank
-    $sheet->setCellValue("E{$row}", $agentName ?? '-');  // Agent Name
-    $sheet->setCellValue("F{$row}", '');  // Client Name - blank
-    $sheet->setCellValue("G{$row}", 'PROFIT / (LOSS)');  // Category
-    $sheet->setCellValue("H{$row}", '');  // Description - blank
-    $sheet->setCellValue("I{$row}", $this->formatAmountForExport($pl));  // Amount (USD)
-    $sheet->setCellValue("J{$row}", $exchangeRate);  // Exchange Rate
-    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($pl * $exchangeRate)); // Amount (Local)
-    $sheet->setCellValue("L{$row}", $pl >= 0 ? 'Profit from email' : 'Loss from email'); // Remarks
-
-    $sheet->getStyle("A{$row}:L{$row}")->applyFromArray([
-        'font' => ['bold' => true],
-        'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FFF3CD']]
-    ]);
-    $row++;
-}
-
-            // Blank row between different tours
-            $row++;
+        // ✅ Auto-size columns A to N
+        foreach (range('A', 'N') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
         }
-
-       foreach (range('A', 'L') as $col) {
-    $sheet->getColumnDimension($col)->setAutoSize(true);
-}
         
         $highestRow = $row - 1;
         if ($highestRow >= 2) {
-          $sheet->getStyle("A2:L{$highestRow}")->applyFromArray([
+            $sheet->getStyle("A2:N{$highestRow}")->applyFromArray([
                 'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
             ]);
         }
@@ -452,12 +479,14 @@ if ($record->profit_loss !== null) {
         $writer = new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($spreadsheet);
         $tempFile = tempnam(sys_get_temp_dir(), 'pnl_');
         $writer->save($tempFile);
+        
         return response()->download($tempFile, $filename, [
             'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         ])->deleteFileAfterSend(true);
 
     } catch (\Exception $e) {
         Log::error('Export to Excel failed: ' . $e->getMessage());
+        Log::error($e->getTraceAsString());
         return redirect()->back()->with('error', 'Failed to export: ' . $e->getMessage());
     }
 }
@@ -628,9 +657,11 @@ public function viewSelected(Request $request)
 public function exportByCountry($country, Request $request)
 {
     try {
+        set_time_limit(300);
+        
         $query = PnlRecord::with('items')->where('country_code', $country);
         
-        // Apply date filters if any
+        // Apply date filters
         if ($request->filled('date_from')) {
             $query->whereDate('received_at', '>=', $request->date_from);
         }
@@ -638,13 +669,26 @@ public function exportByCountry($country, Request $request)
             $query->whereDate('received_at', '<=', $request->date_to);
         }
         
-        $records = $query->orderBy('received_at', 'desc')->get();
+        // Travel date filters
+        if ($request->filled('travel_date_from')) {
+            $from = $request->travel_date_from;
+            $query->whereHas('items', function($q) use ($from) {
+                $q->where('type', 'HOTEL')->whereDate('check_in_date', '>=', $from);
+            });
+        }
+        if ($request->filled('travel_date_to')) {
+            $to = $request->travel_date_to;
+            $query->whereHas('items', function($q) use ($to) {
+                $q->where('type', 'HOTEL')->whereDate('check_out_date', '<=', $to);
+            });
+        }
         
-        if ($records->isEmpty()) {
+        $totalRecords = $query->count();
+        
+        if ($totalRecords == 0) {
             return redirect()->back()->with('error', "No records found for country: {$country}");
         }
-           $records = $this->getLatestPnLRecords($records);
-        // Create filename with country
+        
         $countryNames = [
             'SG' => 'Singapore',
             'MY' => 'Malaysia', 
@@ -654,13 +698,13 @@ public function exportByCountry($country, Request $request)
         $countryName = $countryNames[$country] ?? $country;
         $filename = "pnl_export_{$countryName}_" . date('Y-m-d_His') . ".xlsx";
         
-        // Create new Spreadsheet
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('PnL - ' . $countryName);
-        $currencySymbol = $this->getCurrencySymbol($country ?? 'VN');
-        // ✅ UPDATED HEADERS WITH CLIENT NAME
-         $headers = [
+        $currencySymbol = $this->getCurrencySymbol($country);
+        
+        // ✅ HEADERS WITH START DATE AND END DATE
+        $headers = [
             'A1' => 'S.No',
             'B1' => 'Tour Number',
             'C1' => 'Invoice Number',
@@ -668,188 +712,174 @@ public function exportByCountry($country, Request $request)
             'E1' => 'Agent Name',
             'F1' => 'Client Name',
             'G1' => 'Category',
-            'H1' => 'Description',
-            'I1' => 'Amount (USD)',
-            'J1' => 'Exchange Rate',
-            'K1' => 'Amount (' . $currencySymbol . ')',
-            'L1' => 'Remarks'
+            'H1' => 'Start Date',
+            'I1' => 'End Date',
+            'J1' => 'Description',
+            'K1' => 'Amount (USD)',
+            'L1' => 'Exchange Rate',
+            'M1' => 'Amount (' . $currencySymbol . ')',
+            'N1' => 'Remarks'
         ];
         
         foreach ($headers as $cell => $value) {
             $sheet->setCellValue($cell, $value);
         }
         
-        // ✅ UPDATED RANGE TO N
-        $headerStyle = [
-            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF'], 'size' => 11],
+        $sheet->getStyle('A1:N1')->applyFromArray([
+            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
             'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
             'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER]
-        ];
-     $sheet->getStyle('A1:L1')->applyFromArray($headerStyle);
+        ]);
         
-        // Color definitions
         $colors = [
-            'INVOICE' => 'D5E8D4',
-            'HOTEL' => 'FFF2CC',
-            'TRANSPORT' => 'DDEBF7',
-            'TOUR TRANSFER' => 'E2EFDA',
-            'ATTRACTION' => 'FCE4D6',
-            'MEALS' => 'E1C699',
+            'INVOICE' => 'D5E8D4', 'HOTEL' => 'FFF2CC', 'TRANSPORT' => 'DDEBF7',
+            'TOUR TRANSFER' => 'E2EFDA', 'ATTRACTION' => 'FCE4D6', 'MEALS' => 'E1C699',
             'OTHER RATES' => 'D9D9D9'
         ];
         
-        // Add data rows
         $row = 2;
         $globalSno = 1;
         
-        foreach ($records as $record) {
-            $exchangeRate = $record->exchange_rate_used ?? 1;
-            $tourRef = $record->tour_ref;
-            $invoiceNumber = $record->invoice_number;
-            $agentName = $record->agent_name;
+        $query->orderBy('received_at', 'desc')->chunk(50, function($records) use (
+            &$sheet, &$row, &$globalSno, $colors, $country, $currencySymbol
+        ) {
+            $records = $this->getLatestPnLRecords($records);
             
-            $items = $record->items;
-            
-            if ($items->isEmpty()) {
-                $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-                $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+            foreach ($records as $record) {
+                $exchangeRate = $record->exchange_rate_used ?? 1;
+                $tourRef = $record->tour_ref;
+                $invoiceNumber = $record->invoice_number;
+                $agentName = $record->agent_name;
+                $items = $record->items;
                 
-                $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
-                
-                // ✅ UPDATED WITH CLIENT NAME
-                $sheet->setCellValue("A{$row}", $globalSno++);
-                $sheet->setCellValue("B{$row}", $tourRef ?? '-');
-                $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-                $sheet->setCellValue("D{$row}", $record->vendor_name ?? '');  // Client Name
-                $sheet->setCellValue("E{$row}", 'INVOICE');
-                $sheet->setCellValue("F{$row}", $startDate);
-                $sheet->setCellValue("G{$row}", $endDate);
-                $sheet->setCellValue("H{$row}", 'Credit');
-                $sheet->setCellValue("I{$row}", $agentName ?? '-');
-                $sheet->setCellValue("J{$row}", 'INVOICE');
-                $sheet->setCellValue("K{$row}", $this->formatAmountForExport($record->amount));
-                $sheet->setCellValue("L{$row}", $exchangeRate);
-                $sheet->setCellValue("M{$row}", $this->formatAmountForExport($record->amount * $exchangeRate));
-                $sheet->setCellValue("N{$row}", $remarks);
-                
-                if (isset($colors['INVOICE'])) {
-                    $sheet->getStyle("A{$row}:N{$row}")->getFill()
-                        ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-                        ->getStartColor()->setRGB($colors['INVOICE']);
+                if ($items->isEmpty()) {
+                    $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                    $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                    $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                    
+                    $sheet->setCellValue("A{$row}", $globalSno++);
+                    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                    $sheet->setCellValue("D{$row}", 'Credit');
+                    $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                    $sheet->setCellValue("F{$row}", $record->vendor_name ?? '');
+                    $sheet->setCellValue("G{$row}", 'INVOICE');
+                    $sheet->setCellValue("H{$row}", $startDate);
+                    $sheet->setCellValue("I{$row}", $endDate);
+                    $sheet->setCellValue("J{$row}", 'INVOICE');
+                    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($record->amount));
+                    $sheet->setCellValue("L{$row}", $exchangeRate);
+                    $sheet->setCellValue("M{$row}", $this->formatAmountForExport($record->amount * $exchangeRate));
+                    $sheet->setCellValue("N{$row}", $remarks);
+                    
+                    if (isset($colors['INVOICE'])) {
+                        $sheet->getStyle("A{$row}:N{$row}")->getFill()
+                            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                            ->getStartColor()->setRGB($colors['INVOICE']);
+                    }
+                    $row++;
+                } else {
+                    foreach ($items as $item) {
+                        $remarks = '';
+                        $itemDetails = json_decode($item->item_details, true);
+                        
+                        $description = $item->service_name ?? $item->type;
+                        if ($item->type == 'HOTEL' && empty($description)) {
+                            $description = $item->hotel_name ?? $item->type;
+                        }
+                        
+                        $amount = $item->amount_original;
+                        $startDate = $item->start_date ?? $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                        $endDate = $item->end_date ?? $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+
+                        if ($item->type == 'INVOICE') {
+                            $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                            $description = 'INVOICE';
+                            $amount = $record->amount;
+                        } else {
+                            $amount = -abs($amount);
+                            if ($item->type == 'HOTEL') {
+                                $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+                            } elseif ($item->type == 'ATTRACTION') {
+                                $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
+                            } elseif ($item->type == 'TOUR TRANSFER') {
+                                $remarks = $itemDetails['remarks'] ?? 'Tour transfer';
+                            } elseif ($item->type == 'TRANSPORT') {
+                                $remarks = $itemDetails['remarks'] ?? 'Transport expenses';
+                            } elseif ($item->type == 'MEALS') {
+                                $remarks = 'Meals expenses';
+                            } elseif ($item->type == 'OTHER RATES') {
+                                $remarks = $itemDetails['remarks'] ?? 'Other fees';
+                            }
+                        }
+
+                        $sheet->setCellValue("A{$row}", $globalSno++);
+                        $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                        $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                        $sheet->setCellValue("D{$row}", $item->credit_type ?? 'Credit');
+                        $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                        $sheet->setCellValue("F{$row}", $item->client_name ?? $record->vendor_name ?? '');
+                        $sheet->setCellValue("G{$row}", $item->type);
+                        $sheet->setCellValue("H{$row}", $startDate);
+                        $sheet->setCellValue("I{$row}", $endDate);
+                        $sheet->setCellValue("J{$row}", $description);
+                        $sheet->setCellValue("K{$row}", $this->formatAmountForExport($amount));
+                        $sheet->setCellValue("L{$row}", $exchangeRate);
+                        $sheet->setCellValue("M{$row}", $this->formatAmountForExport($amount * $exchangeRate));
+                        $sheet->setCellValue("N{$row}", $remarks);
+
+                        if (isset($colors[$item->type])) {
+                            $sheet->getStyle("A{$row}:N{$row}")->getFill()
+                                ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                                ->getStartColor()->setRGB($colors[$item->type]);
+                        }
+                        
+                        $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([
+                            'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
+                        ]);
+                        
+                        $row++;
+                    }
                 }
+
+                // Profit/Loss Row
+                if ($record->profit_loss !== null) {
+                    $pl = $record->profit_loss;
+                    $sheet->setCellValue("A{$row}", '');
+                    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                    $sheet->setCellValue("D{$row}", '');
+                    $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                    $sheet->setCellValue("F{$row}", '');
+                    $sheet->setCellValue("G{$row}", 'PROFIT / (LOSS)');
+                    $sheet->setCellValue("H{$row}", '');
+                    $sheet->setCellValue("I{$row}", '');
+                    $sheet->setCellValue("J{$row}", '');
+                    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($pl));
+                    $sheet->setCellValue("L{$row}", $exchangeRate);
+                    $sheet->setCellValue("M{$row}", $this->formatAmountForExport($pl * $exchangeRate));
+                    $sheet->setCellValue("N{$row}", $pl >= 0 ? 'Profit from email' : 'Loss from email');
+
+                    $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([
+                        'font' => ['bold' => true],
+                        'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FFF3CD']]
+                    ]);
+                    $row++;
+                }
+
                 $row++;
-            } else {
-// ========== WRITE DATA ROWS ==========
-foreach ($items as $item) {
-    $remarks = '';
-    $itemDetails = json_decode($item->item_details, true);
-    
-    // Use service_name as description by default
-    $description = $item->service_name ?? $item->type;
-    
-    // For hotels, use hotel_name if available
-    if ($item->type == 'HOTEL' && empty($description)) {
-        $description = $item->hotel_name ?? $item->type;
-    }
-    
-    $amount = $item->amount_original;
-    
-    $startDate = $item->start_date ?? $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-    $endDate = $item->end_date ?? $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-
-    if ($item->type == 'INVOICE') {
-        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
-        $description = 'INVOICE';
-        $amount = $record->amount;  // Keep positive for INVOICE
-    } else {
-        $amount = -abs($amount);
-        if ($item->type == 'HOTEL') {
-            $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
-        } elseif ($item->type == 'ATTRACTION') {
-            $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
-        } elseif ($item->type == 'TOUR TRANSFER') {
-            $remarks = $itemDetails['remarks'] ?? 'Tour transfer';
-        } elseif ($item->type == 'TRANSPORT') {
-            $remarks = $itemDetails['remarks'] ?? 'Transport expenses';
-        } elseif ($item->type == 'MEALS') {
-            $remarks = 'Meals expenses';
-        } elseif ($item->type == 'OTHER RATES') {
-            $remarks = $itemDetails['remarks'] ?? 'Other fees';
-        }
-    }
-
-    // ✅ CORRECT COLUMN ORDER (A to L)
-    $sheet->setCellValue("A{$row}", $globalSno++);                                    // S.No
-    $sheet->setCellValue("B{$row}", $tourRef ?? '-');                                // Tour Number
-    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');                          // Invoice Number
-    $sheet->setCellValue("D{$row}", $item->credit_type ?? 'Credit');                // Agent Type
-    $sheet->setCellValue("E{$row}", $agentName ?? '-');                             // Agent Name
-    $sheet->setCellValue("F{$row}", $item->client_name ?? $record->vendor_name ?? ''); // Client Name
-    $sheet->setCellValue("G{$row}", $item->type);                                  // Category
-    $sheet->setCellValue("H{$row}", $description);                                 // Description
-    $sheet->setCellValue("I{$row}", $this->formatAmountForExport($amount));        // Amount (USD)
-    $sheet->setCellValue("J{$row}", $exchangeRate);                               // Exchange Rate
-    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($amount * $exchangeRate)); // Amount (Local)
-    $sheet->setCellValue("L{$row}", $remarks);                                   // Remarks
-
-    // Color coding - Range A:L
-    if (isset($colors[$item->type])) {
-        $sheet->getStyle("A{$row}:L{$row}")->getFill()
-            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-            ->getStartColor()->setRGB($colors[$item->type]);
-    }
-    
-    // Borders - Range A:L
-    $sheet->getStyle("A{$row}:L{$row}")->applyFromArray([
-        'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
-    ]);
-    
-    $row++;
-}
             }
+        });
 
-          // ✅ CORRECT Profit/Loss Row (A to L)
-if ($record->profit_loss !== null) {
-    $pl = $record->profit_loss;
-    $sheet->setCellValue("A{$row}", '');
-    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
-    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-    $sheet->setCellValue("D{$row}", '');  // Agent Type - blank
-    $sheet->setCellValue("E{$row}", $agentName ?? '-');  // Agent Name
-    $sheet->setCellValue("F{$row}", '');  // Client Name - blank
-    $sheet->setCellValue("G{$row}", 'PROFIT / (LOSS)');  // Category
-    $sheet->setCellValue("H{$row}", '');  // Description - blank
-    $sheet->setCellValue("I{$row}", $this->formatAmountForExport($pl));  // Amount (USD)
-    $sheet->setCellValue("J{$row}", $exchangeRate);  // Exchange Rate
-    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($pl * $exchangeRate)); // Amount (Local)
-    $sheet->setCellValue("L{$row}", $pl >= 0 ? 'Profit from email' : 'Loss from email'); // Remarks
-
-    $sheet->getStyle("A{$row}:L{$row}")->applyFromArray([
-        'font' => ['bold' => true],
-        'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FFF3CD']]
-    ]);
-    $row++;
-}
-
-            // Blank separator
-            $row++;
+        // ✅ Auto-size columns A to N
+        foreach (range('A', 'N') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
         }
         
-        // ✅ UPDATED: Auto-size columns A to N
-     foreach (range('A', 'L') as $col) {
-    $sheet->getColumnDimension($col)->setAutoSize(true);
-}
-        
-        // ✅ UPDATED: Borders A to N
         $highestRow = $row - 1;
         if ($highestRow >= 2) {
-           $sheet->getStyle("A2:L{$highestRow}")->applyFromArray([
-                'borders' => [
-                    'allBorders' => [
-                        'borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN,
-                        'color' => ['rgb' => 'CCCCCC']
-                    ]
-                ]
+            $sheet->getStyle("A2:N{$highestRow}")->applyFromArray([
+                'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
             ]);
         }
         
@@ -1123,74 +1153,147 @@ private function formatAmountForExport($amount)
 /**
  * Export selected PnL records
  */
+/**
+ * Export selected PnL records OR export all filtered records
+ */
 public function exportSelected(Request $request)
 {
     try {
-        // Handle both POST and GET requests
-        $ids = $request->input('ids');
+        set_time_limit(300);
         
-        // If it's a GET request, IDs might be a comma-separated string
-        if (empty($ids) && $request->has('ids')) {
-            $ids = $request->query('ids');
+        // ✅ Check if we should export ALL filtered records
+        $exportAll = $request->input('export_all', false);
+        $ids = $request->input('ids', []);
+        
+        // If export_all is true, get ALL records matching filters
+        if ($exportAll) {
+            $query = PnlRecord::with('items');
+            
+            // ✅ Apply all filters from the request
+            if ($request->filled('search')) {
+                $search = $request->search;
+                $query->where(function($q) use ($search) {
+                    $q->where('vendor_name', 'like', "%{$search}%")
+                      ->orWhere('invoice_number', 'like', "%{$search}%")
+                      ->orWhere('tour_ref', 'like', "%{$search}%")
+                      ->orWhere('subject', 'like', "%{$search}%")
+                      ->orWhere('from_email', 'like', "%{$search}%");
+                });
+            }
+            
+            if ($request->filled('category')) {
+                $query->where('category', $request->category);
+            }
+            
+            if ($request->filled('country')) {
+                $query->where('country_code', $request->country);
+            }
+            
+            if ($request->filled('status')) {
+                $query->where('status', $request->status);
+            }
+            
+            if ($request->filled('date_from')) {
+                $query->whereDate('received_at', '>=', $request->date_from);
+            }
+            if ($request->filled('date_to')) {
+                $query->whereDate('received_at', '<=', $request->date_to);
+            }
+            
+            // Travel date filters
+            if ($request->filled('travel_date_from')) {
+                $from = $request->travel_date_from;
+                $query->whereHas('items', function($q) use ($from) {
+                    $q->where('type', 'HOTEL')->whereDate('check_in_date', '>=', $from);
+                });
+            }
+            if ($request->filled('travel_date_to')) {
+                $to = $request->travel_date_to;
+                $query->whereHas('items', function($q) use ($to) {
+                    $q->where('type', 'HOTEL')->whereDate('check_out_date', '<=', $to);
+                });
+            }
+            
+            // ✅ Get ALL records matching filters
+            $records = $query->orderBy('received_at', 'desc')->get();
+            
+            if ($records->isEmpty()) {
+                if ($request->isMethod('get')) {
+                    return redirect()->back()->with('error', 'No records found to export.');
+                }
+                return response()->json(['success' => false, 'message' => 'No records found'], 404);
+            }
+            
+        } else {
+            // ✅ Export only selected IDs
+            if (empty($ids)) {
+                if ($request->has('ids')) {
+                    $ids = $request->query('ids');
+                    if (is_string($ids)) {
+                        $ids = explode(',', $ids);
+                    }
+                }
+            }
+            
+            if (empty($ids) && $request->has('ids')) {
+                $ids = $request->ids;
+                if (is_string($ids) && strpos($ids, ',') !== false) {
+                    $ids = explode(',', $ids);
+                }
+            }
+            
+            if (empty($ids)) {
+                if ($request->isMethod('get')) {
+                    return redirect()->back()->with('error', 'No records selected to export.');
+                }
+                return response()->json(['success' => false, 'message' => 'No records selected'], 400);
+            }
+            
             if (is_string($ids)) {
                 $ids = explode(',', $ids);
             }
-        }
-        
-        // If still empty, check if it's a JSON string
-        if (empty($ids) && $request->has('ids')) {
-            $ids = $request->ids;
-            if (is_string($ids) && strpos($ids, ',') !== false) {
-                $ids = explode(',', $ids);
+            
+            $ids = array_map('intval', $ids);
+            $ids = array_filter($ids);
+            
+            if (empty($ids)) {
+                if ($request->isMethod('get')) {
+                    return redirect()->back()->with('error', 'Invalid record IDs.');
+                }
+                return response()->json(['success' => false, 'message' => 'Invalid record IDs'], 400);
+            }
+            
+            $records = PnlRecord::with('items')
+                ->whereIn('id', $ids)
+                ->orderBy('received_at', 'desc')
+                ->get();
+            
+            if ($records->isEmpty()) {
+                if ($request->isMethod('get')) {
+                    return redirect()->back()->with('error', 'No records found.');
+                }
+                return response()->json(['success' => false, 'message' => 'No records found'], 404);
             }
         }
         
-        if (empty($ids)) {
-            // If it's a GET request from selected-view, redirect back with error
-            if ($request->isMethod('get')) {
-                return redirect()->back()->with('error', 'No records selected to export.');
-            }
-            return response()->json(['success' => false, 'message' => 'No records selected'], 400);
-        }
+        // ✅ Get latest revisions
+        $records = $this->getLatestPnLRecords($records);
         
-        // Convert to array if it's a string
-        if (is_string($ids)) {
-            $ids = explode(',', $ids);
-        }
-        
-        // Ensure IDs are integers
-        $ids = array_map('intval', $ids);
-        $ids = array_filter($ids);
-        
-        if (empty($ids)) {
-            if ($request->isMethod('get')) {
-                return redirect()->back()->with('error', 'Invalid record IDs.');
-            }
-            return response()->json(['success' => false, 'message' => 'Invalid record IDs'], 400);
-        }
-        
-        $records = PnlRecord::with('items')
-            ->whereIn('id', $ids)
-            ->orderBy('received_at', 'desc')
-            ->get();
-        
-        if ($records->isEmpty()) {
-            if ($request->isMethod('get')) {
-                return redirect()->back()->with('error', 'No records found.');
-            }
-            return response()->json(['success' => false, 'message' => 'No records found'], 404);
-        }
-         $records = $this->getLatestPnLRecords($records);
         // Create filename
-        $filename = "pnl_selected_" . date('Y-m-d_His') . ".xlsx";
+        $filename = $exportAll 
+            ? "pnl_export_all_filtered_" . date('Y-m-d_His') . ".xlsx"
+            : "pnl_selected_" . date('Y-m-d_His') . ".xlsx";
         
-        // Create new Spreadsheet
+        // Create spreadsheet
         $spreadsheet = new \PhpOffice\PhpSpreadsheet\Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
-        $sheet->setTitle('Selected PnL');
-        $currencySymbol = $this->getCurrencySymbol($country ?? 'VN');
-        // Headers
-         $headers = [
+        $sheet->setTitle($exportAll ? 'All Filtered PnL' : 'Selected PnL');
+        
+        $country = $records->first()->country_code ?? 'VN';
+        $currencySymbol = $this->getCurrencySymbol($country);
+        
+        // Headers WITH START DATE AND END DATE
+        $headers = [
             'A1' => 'S.No',
             'B1' => 'Tour Number',
             'C1' => 'Invoice Number',
@@ -1198,31 +1301,28 @@ public function exportSelected(Request $request)
             'E1' => 'Agent Name',
             'F1' => 'Client Name',
             'G1' => 'Category',
-            'H1' => 'Description',
-            'I1' => 'Amount (USD)',
-            'J1' => 'Exchange Rate',
-            'K1' => 'Amount (' . $currencySymbol . ')',
-            'L1' => 'Remarks'
+            'H1' => 'Start Date',
+            'I1' => 'End Date',
+            'J1' => 'Description',
+            'K1' => 'Amount (USD)',
+            'L1' => 'Exchange Rate',
+            'M1' => 'Amount (' . $currencySymbol . ')',
+            'N1' => 'Remarks'
         ];
         
         foreach ($headers as $cell => $value) {
             $sheet->setCellValue($cell, $value);
         }
         
-      // ✅ CORRECT - Match headers (A to L)
-$sheet->getStyle('A1:L1')->applyFromArray([
-    'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
-    'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
-    'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER]
-]);
+        $sheet->getStyle('A1:N1')->applyFromArray([
+            'font' => ['bold' => true, 'color' => ['rgb' => 'FFFFFF']],
+            'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => '4472C4']],
+            'alignment' => ['horizontal' => \PhpOffice\PhpSpreadsheet\Style\Alignment::HORIZONTAL_CENTER]
+        ]);
         
         $colors = [
-            'INVOICE' => 'D5E8D4',
-            'HOTEL' => 'FFF2CC',
-            'TRANSPORT' => 'DDEBF7',
-            'TOUR TRANSFER' => 'E2EFDA',
-            'ATTRACTION' => 'FCE4D6',
-            'MEALS' => 'E1C699',
+            'INVOICE' => 'D5E8D4', 'HOTEL' => 'FFF2CC', 'TRANSPORT' => 'DDEBF7',
+            'TOUR TRANSFER' => 'E2EFDA', 'ATTRACTION' => 'FCE4D6', 'MEALS' => 'E1C699',
             'OTHER RATES' => 'D9D9D9'
         ];
         
@@ -1234,144 +1334,134 @@ $sheet->getStyle('A1:L1')->applyFromArray([
             $tourRef = $record->tour_ref;
             $invoiceNumber = $record->invoice_number;
             $agentName = $record->agent_name;
-            
             $items = $record->items;
             
-          if ($items->isEmpty()) {
-    $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-    $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-    $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
-    
-    // ✅ CORRECT COLUMN ORDER (A to L)
-    $sheet->setCellValue("A{$row}", $globalSno++);                                    // S.No
-    $sheet->setCellValue("B{$row}", $tourRef ?? '-');                                // Tour Number
-    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');                          // Invoice Number
-    $sheet->setCellValue("D{$row}", 'Credit');                                      // Agent Type
-    $sheet->setCellValue("E{$row}", $agentName ?? '-');                             // Agent Name
-    $sheet->setCellValue("F{$row}", $record->vendor_name ?? '');                    // Client Name
-    $sheet->setCellValue("G{$row}", 'INVOICE');                                     // Category
-    $sheet->setCellValue("H{$row}", 'INVOICE');                                     // Description
-    $sheet->setCellValue("I{$row}", $this->formatAmountForExport($record->amount)); // Amount (USD)
-    $sheet->setCellValue("J{$row}", $exchangeRate);                                // Exchange Rate
-    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($record->amount * $exchangeRate)); // Amount (Local)
-    $sheet->setCellValue("L{$row}", $remarks);                                     // Remarks
-    
-    if (isset($colors['INVOICE'])) {
-        $sheet->getStyle("A{$row}:L{$row}")->getFill()
-            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-            ->getStartColor()->setRGB($colors['INVOICE']);
-    }
-    $row++;
-}else {
-              // ========== WRITE DATA ROWS ==========
-foreach ($items as $item) {
-    $remarks = '';
-    $itemDetails = json_decode($item->item_details, true);
-    
-    // Use service_name as description by default
-    $description = $item->service_name ?? $item->type;
-    
-    // For hotels, use hotel_name if available
-    if ($item->type == 'HOTEL' && empty($description)) {
-        $description = $item->hotel_name ?? $item->type;
-    }
-    
-    $amount = $item->amount_original;
-    
-    $startDate = $item->start_date ?? $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
-    $endDate = $item->end_date ?? $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+            if ($items->isEmpty()) {
+                $startDate = $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                $endDate = $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                
+                $sheet->setCellValue("A{$row}", $globalSno++);
+                $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                $sheet->setCellValue("D{$row}", 'Credit');
+                $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                $sheet->setCellValue("F{$row}", $record->vendor_name ?? '');
+                $sheet->setCellValue("G{$row}", 'INVOICE');
+                $sheet->setCellValue("H{$row}", $startDate);
+                $sheet->setCellValue("I{$row}", $endDate);
+                $sheet->setCellValue("J{$row}", 'INVOICE');
+                $sheet->setCellValue("K{$row}", $this->formatAmountForExport($record->amount));
+                $sheet->setCellValue("L{$row}", $exchangeRate);
+                $sheet->setCellValue("M{$row}", $this->formatAmountForExport($record->amount * $exchangeRate));
+                $sheet->setCellValue("N{$row}", $remarks);
+                
+                if (isset($colors['INVOICE'])) {
+                    $sheet->getStyle("A{$row}:N{$row}")->getFill()
+                        ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                        ->getStartColor()->setRGB($colors['INVOICE']);
+                }
+                $row++;
+            } else {
+                foreach ($items as $item) {
+                    $remarks = '';
+                    $itemDetails = json_decode($item->item_details, true);
+                    
+                    $description = $item->service_name ?? $item->type;
+                    if ($item->type == 'HOTEL' && empty($description)) {
+                        $description = $item->hotel_name ?? $item->type;
+                    }
+                    
+                    $amount = $item->amount_original;
+                    $startDate = $item->start_date ?? $record->start_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
+                    $endDate = $item->end_date ?? $record->end_date ?? ($record->received_at ? $record->received_at->format('Y-m-d') : date('Y-m-d'));
 
-    if ($item->type == 'INVOICE') {
-        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
-        $description = 'INVOICE';
-        $amount = $record->amount;  // Keep positive for INVOICE
-    } else {
-        $amount = -abs($amount);
-        if ($item->type == 'HOTEL') {
-            $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
-        } elseif ($item->type == 'ATTRACTION') {
-            $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
-        } elseif ($item->type == 'TOUR TRANSFER') {
-            $remarks = $itemDetails['remarks'] ?? 'Tour transfer';
-        } elseif ($item->type == 'TRANSPORT') {
-            $remarks = $itemDetails['remarks'] ?? 'Transport expenses';
-        } elseif ($item->type == 'MEALS') {
-            $remarks = 'Meals expenses';
-        } elseif ($item->type == 'OTHER RATES') {
-            $remarks = $itemDetails['remarks'] ?? 'Other fees';
-        }
-    }
+                    if ($item->type == 'INVOICE') {
+                        $remarks = "Pax: {$record->total_pax}, Nights: {$record->total_nights}";
+                        $description = 'INVOICE';
+                        $amount = $record->amount;
+                    } else {
+                        $amount = -abs($amount);
+                        if ($item->type == 'HOTEL') {
+                            $remarks = ($itemDetails['nights'] ?? 1) . ' nights';
+                        } elseif ($item->type == 'ATTRACTION') {
+                            $remarks = $itemDetails['remarks'] ?? $item->service_name ?? 'Attraction fees';
+                        } elseif ($item->type == 'TOUR TRANSFER') {
+                            $remarks = $itemDetails['remarks'] ?? 'Tour transfer';
+                        } elseif ($item->type == 'TRANSPORT') {
+                            $remarks = $itemDetails['remarks'] ?? 'Transport expenses';
+                        } elseif ($item->type == 'MEALS') {
+                            $remarks = 'Meals expenses';
+                        } elseif ($item->type == 'OTHER RATES') {
+                            $remarks = $itemDetails['remarks'] ?? 'Other fees';
+                        }
+                    }
 
-    // ✅ CORRECT COLUMN ORDER (A to L)
-    $sheet->setCellValue("A{$row}", $globalSno++);                                    // S.No
-    $sheet->setCellValue("B{$row}", $tourRef ?? '-');                                // Tour Number
-    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');                          // Invoice Number
-    $sheet->setCellValue("D{$row}", $item->credit_type ?? 'Credit');                // Agent Type
-    $sheet->setCellValue("E{$row}", $agentName ?? '-');                             // Agent Name
-    $sheet->setCellValue("F{$row}", $item->client_name ?? $record->vendor_name ?? ''); // Client Name
-    $sheet->setCellValue("G{$row}", $item->type);                                  // Category
-    $sheet->setCellValue("H{$row}", $description);                                 // Description
-    $sheet->setCellValue("I{$row}", $this->formatAmountForExport($amount));        // Amount (USD)
-    $sheet->setCellValue("J{$row}", $exchangeRate);                               // Exchange Rate
-    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($amount * $exchangeRate)); // Amount (Local)
-    $sheet->setCellValue("L{$row}", $remarks);                                   // Remarks
+                    $sheet->setCellValue("A{$row}", $globalSno++);
+                    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                    $sheet->setCellValue("D{$row}", $item->credit_type ?? 'Credit');
+                    $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                    $sheet->setCellValue("F{$row}", $item->client_name ?? $record->vendor_name ?? '');
+                    $sheet->setCellValue("G{$row}", $item->type);
+                    $sheet->setCellValue("H{$row}", $startDate);
+                    $sheet->setCellValue("I{$row}", $endDate);
+                    $sheet->setCellValue("J{$row}", $description);
+                    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($amount));
+                    $sheet->setCellValue("L{$row}", $exchangeRate);
+                    $sheet->setCellValue("M{$row}", $this->formatAmountForExport($amount * $exchangeRate));
+                    $sheet->setCellValue("N{$row}", $remarks);
 
-    // Color coding - Range A:L
-    if (isset($colors[$item->type])) {
-        $sheet->getStyle("A{$row}:L{$row}")->getFill()
-            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
-            ->getStartColor()->setRGB($colors[$item->type]);
-    }
-    
-    // Borders - Range A:L
-    $sheet->getStyle("A{$row}:L{$row}")->applyFromArray([
-        'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
-    ]);
-    
-    $row++;
-}
+                    if (isset($colors[$item->type])) {
+                        $sheet->getStyle("A{$row}:N{$row}")->getFill()
+                            ->setFillType(\PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID)
+                            ->getStartColor()->setRGB($colors[$item->type]);
+                    }
+                    
+                    $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([
+                        'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
+                    ]);
+                    
+                    $row++;
+                }
             }
-            
-           // ✅ CORRECT Profit/Loss Row (A to L)
-if ($record->profit_loss !== null) {
-    $pl = $record->profit_loss;
-    $sheet->setCellValue("A{$row}", '');
-    $sheet->setCellValue("B{$row}", $tourRef ?? '-');
-    $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
-    $sheet->setCellValue("D{$row}", '');  // Agent Type - blank
-    $sheet->setCellValue("E{$row}", $agentName ?? '-');  // Agent Name
-    $sheet->setCellValue("F{$row}", '');  // Client Name - blank
-    $sheet->setCellValue("G{$row}", 'PROFIT / (LOSS)');  // Category
-    $sheet->setCellValue("H{$row}", '');  // Description - blank
-    $sheet->setCellValue("I{$row}", $this->formatAmountForExport($pl));  // Amount (USD)
-    $sheet->setCellValue("J{$row}", $exchangeRate);  // Exchange Rate
-    $sheet->setCellValue("K{$row}", $this->formatAmountForExport($pl * $exchangeRate)); // Amount (Local)
-    $sheet->setCellValue("L{$row}", $pl >= 0 ? 'Profit from email' : 'Loss from email'); // Remarks
 
-    $sheet->getStyle("A{$row}:L{$row}")->applyFromArray([
-        'font' => ['bold' => true],
-        'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FFF3CD']]
-    ]);
-    $row++;
-}
-            
-            // Blank separator
+            // Profit/Loss Row
+            if ($record->profit_loss !== null) {
+                $pl = $record->profit_loss;
+                $sheet->setCellValue("A{$row}", '');
+                $sheet->setCellValue("B{$row}", $tourRef ?? '-');
+                $sheet->setCellValue("C{$row}", $invoiceNumber ?? '-');
+                $sheet->setCellValue("D{$row}", '');
+                $sheet->setCellValue("E{$row}", $agentName ?? '-');
+                $sheet->setCellValue("F{$row}", '');
+                $sheet->setCellValue("G{$row}", 'PROFIT / (LOSS)');
+                $sheet->setCellValue("H{$row}", '');
+                $sheet->setCellValue("I{$row}", '');
+                $sheet->setCellValue("J{$row}", '');
+                $sheet->setCellValue("K{$row}", $this->formatAmountForExport($pl));
+                $sheet->setCellValue("L{$row}", $exchangeRate);
+                $sheet->setCellValue("M{$row}", $this->formatAmountForExport($pl * $exchangeRate));
+                $sheet->setCellValue("N{$row}", $pl >= 0 ? 'Profit from email' : 'Loss from email');
+
+                $sheet->getStyle("A{$row}:N{$row}")->applyFromArray([
+                    'font' => ['bold' => true],
+                    'fill' => ['fillType' => \PhpOffice\PhpSpreadsheet\Style\Fill::FILL_SOLID, 'startColor' => ['rgb' => 'FFF3CD']]
+                ]);
+                $row++;
+            }
+
             $row++;
         }
+
+        foreach (range('A', 'N') as $col) {
+            $sheet->getColumnDimension($col)->setAutoSize(true);
+        }
         
-     foreach (range('A', 'L') as $col) {
-    $sheet->getColumnDimension($col)->setAutoSize(true);
-}
-        // Borders
         $highestRow = $row - 1;
         if ($highestRow >= 2) {
-           $sheet->getStyle("A2:L{$highestRow}")->applyFromArray([
-                'borders' => [
-                    'allBorders' => [
-                        'borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN,
-                        'color' => ['rgb' => 'CCCCCC']
-                    ]
-                ]
+            $sheet->getStyle("A2:N{$highestRow}")->applyFromArray([
+                'borders' => ['allBorders' => ['borderStyle' => \PhpOffice\PhpSpreadsheet\Style\Border::BORDER_THIN]]
             ]);
         }
         

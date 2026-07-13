@@ -53,7 +53,41 @@ class PayableReportService
             $tourTransfers = [];
             
             foreach ($records as $record) {
+                // ✅ Group items by invoice_number to get only the latest revision
+                $itemsByInvoice = [];
                 foreach ($record->items as $item) {
+                    $invoiceKey = $item->invoice_number ?? $record->invoice_number;
+                    
+                    // ✅ Check if this is a revision (contains _R2, _R3, etc.)
+                    $isRevision = preg_match('/_R\d+/i', $invoiceKey);
+                    
+                    // ✅ For revisions, we want the latest one
+                    if ($isRevision) {
+                        // Extract revision number
+                        preg_match('/_R(\d+)/i', $invoiceKey, $match);
+                        $revNum = intval($match[1] ?? 0);
+                        
+                        // Store the item with its revision number
+                        if (!isset($itemsByInvoice[$invoiceKey]) || $revNum > $itemsByInvoice[$invoiceKey]['rev_num']) {
+                            $itemsByInvoice[$invoiceKey] = [
+                                'item' => $item,
+                                'rev_num' => $revNum,
+                                'invoice_key' => $invoiceKey
+                            ];
+                        }
+                    } else {
+                        // Non-revision items - keep all
+                        $itemsByInvoice[$invoiceKey . '_' . uniqid()] = [
+                            'item' => $item,
+                            'rev_num' => 0,
+                            'invoice_key' => $invoiceKey
+                        ];
+                    }
+                }
+                
+                // ✅ Process only the latest items
+                foreach ($itemsByInvoice as $itemData) {
+                    $item = $itemData['item'];
                     $type = strtoupper($item->type ?? 'OTHER');
                     
                     if ($type === 'HOTEL') {
@@ -64,7 +98,7 @@ class PayableReportService
                     } elseif ($type === 'TRANSPORT') {
                         // Group transport by tour_ref
                         $tourRef = $record->tour_ref ?? $record->invoice_number ?? 'N/A';
-                        $startDate = $item->start_date ?? $item->check_in_date ?? null;
+                        $startDate = $record->travel_start_date ?? $item->start_date ?? $item->check_in_date ?? null;
                         
                         if ($startDate) {
                             $startDateStr = date('Y-m-d', strtotime($startDate));
@@ -80,7 +114,7 @@ class PayableReportService
                                 'agent_name' => $record->agent_name ?? 'N/A',
                                 'client_name' => $record->guest_name ?? $record->from_name ?? 'N/A',
                                 'start_date' => $startDate,
-                                'end_date' => $item->end_date ?? $item->check_out_date ?? null,
+                                'end_date' => $record->travel_end_date ?? $item->end_date ?? $item->check_out_date ?? null,
                                 'items' => [],
                                 'total_usd' => 0,
                                 'total_lkr' => 0,
@@ -159,7 +193,7 @@ class PayableReportService
     }
     
     /**
-     * Process HOTEL items
+     * Process HOTEL items - uses hotel's own check_in_date and check_out_date
      */
     protected function processHotelItem($item, $record, $exchangeRate, $checkInDateToFind)
     {
@@ -170,7 +204,10 @@ class PayableReportService
                 return null;
             }
             
+            // ✅ Use hotel's own dates from pnl_items
             $checkInDate = $item->check_in_date ?? $item->start_date ?? null;
+            $checkOutDate = $item->check_out_date ?? $item->end_date ?? null;
+            
             if (!$checkInDate) {
                 return null;
             }
@@ -183,16 +220,18 @@ class PayableReportService
             $usdAmount = $item->amount_original ?? 0;
             $budgetedLKR = $usdAmount * $exchangeRate;
             
+            // ✅ Get hotel details from hotel_details table
             $hotelDetail = HotelDetail::where('hotel_name', 'LIKE', "%{$hotelName}%")
                 ->where('country_code', $record->country_code ?? 'LK')
                 ->first();
             
-            $checkOutDate = $item->check_out_date ?? $item->end_date ?? null;
+            // ✅ Get invoice number - use the one with _R2 if exists
+            $invoiceNumber = $item->invoice_number ?? $record->invoice_number ?? 'N/A';
             
             return [
                 'type' => 'HOTEL',
                 'tour_number' => $record->tour_ref ?? $record->invoice_number ?? null,
-                'invoice_number' => $record->invoice_number ?? null,
+                'invoice_number' => $invoiceNumber,
                 'vendor_name' => $hotelName,
                 'client_name' => $record->guest_name ?? $record->from_name ?? 'N/A',
                 'agent_name' => $record->agent_name ?? 'N/A',
@@ -254,28 +293,23 @@ class PayableReportService
             $budgetedLKR = $usdAmount * $exchangeRate;
             
             // ✅ Attraction: Deduct LKR 5,000 from total and collect remaining as advance
-            $advanceDeduction = 5000; // LKR 5,000 deduction
+            $advanceDeduction = 5000;
             $totalLKR = $budgetedLKR;
             $advanceAmount = $totalLKR - $advanceDeduction;
             
-            // If total is less than 5000, advance is 0
             if ($advanceAmount < 0) {
                 $advanceAmount = 0;
             }
             
             $checkOutDate = $item->check_out_date ?? $item->end_date ?? null;
             
-            // Get attraction details from item_details
             $details = $item->item_details ?? [];
-            $attractionDetails = '';
-            if (isset($details['remarks'])) {
-                $attractionDetails = $details['remarks'];
-            }
+            $attractionDetails = $details['remarks'] ?? '';
             
             return [
                 'type' => 'ATTRACTION',
                 'tour_number' => $record->tour_ref ?? $record->invoice_number ?? null,
-                'invoice_number' => $record->invoice_number ?? null,
+                'invoice_number' => $item->invoice_number ?? $record->invoice_number ?? 'N/A',
                 'vendor_name' => $attractionName,
                 'client_name' => $record->guest_name ?? $record->from_name ?? 'N/A',
                 'agent_name' => $record->agent_name ?? 'N/A',
@@ -286,16 +320,12 @@ class PayableReportService
                 'exchange_rate' => $exchangeRate,
                 'payable_lkr' => $totalLKR,
                 'hold_process' => 'Process',
-                
-                // ✅ Attraction specific fields
                 'advance_percent' => null,
                 'fuel_advance' => null,
                 'tour_advance' => null,
                 'advance_deduction' => $advanceDeduction,
                 'advance_amount' => $advanceAmount,
                 'attraction_details' => $attractionDetails,
-                
-                // Other fields (N/A)
                 'ac_name' => 'N/A',
                 'bank' => 'N/A',
                 'account_number' => 'N/A',
@@ -307,7 +337,6 @@ class PayableReportService
                 'driver_bank' => 'N/A',
                 'transport_details' => null,
                 'tour_transfer_details' => null,
-                
                 'item_id' => $item->id,
                 'record_id' => $record->id,
             ];
@@ -345,17 +374,13 @@ class PayableReportService
             
             $checkOutDate = $item->check_out_date ?? $item->end_date ?? null;
             
-            // Get transfer details
             $details = $item->item_details ?? [];
-            $transferDetails = '';
-            if (isset($details['remarks'])) {
-                $transferDetails = $details['remarks'];
-            }
+            $transferDetails = $details['remarks'] ?? '';
             
             return [
                 'type' => 'TOUR TRANSFER',
                 'tour_number' => $record->tour_ref ?? $record->invoice_number ?? null,
-                'invoice_number' => $record->invoice_number ?? null,
+                'invoice_number' => $item->invoice_number ?? $record->invoice_number ?? 'N/A',
                 'vendor_name' => $transferName,
                 'client_name' => $record->guest_name ?? $record->from_name ?? 'N/A',
                 'agent_name' => $record->agent_name ?? 'N/A',
@@ -366,11 +391,7 @@ class PayableReportService
                 'exchange_rate' => $exchangeRate,
                 'payable_lkr' => $budgetedLKR,
                 'hold_process' => 'Process',
-                
-                // Tour Transfer specific
                 'tour_transfer_details' => $transferDetails,
-                
-                // Other fields (N/A)
                 'ac_name' => 'N/A',
                 'bank' => 'N/A',
                 'account_number' => 'N/A',
@@ -385,7 +406,6 @@ class PayableReportService
                 'tour_advance' => null,
                 'transport_details' => null,
                 'attraction_details' => null,
-                
                 'item_id' => $item->id,
                 'record_id' => $record->id,
             ];
@@ -431,7 +451,6 @@ class PayableReportService
                 'exchange_rate' => $exchangeRate,
                 'payable_lkr' => $totalLKR,
                 'hold_process' => 'Process',
-                
                 'advance_percent' => $advancePercent,
                 'fuel_advance' => $fuelAdvance,
                 'tour_advance' => $tourAdvance,
@@ -439,7 +458,6 @@ class PayableReportService
                 'driver_account' => $driverDetail->account_number ?? 'N/A',
                 'driver_bank' => $driverDetail->bank_branch ?? 'N/A',
                 'transport_details' => $transportDetailsStr,
-                
                 'ac_name' => 'N/A',
                 'bank' => $driverDetail->bank_branch ?? 'N/A',
                 'account_number' => $driverDetail->account_number ?? 'N/A',
@@ -448,7 +466,6 @@ class PayableReportService
                 'swift' => 'N/A',
                 'attraction_details' => null,
                 'tour_transfer_details' => null,
-                
                 'record_id' => $group['record_id'],
             ];
             
