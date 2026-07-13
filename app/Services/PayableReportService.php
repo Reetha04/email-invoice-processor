@@ -19,7 +19,7 @@ class PayableReportService
     }
     
     /**
-     * Generate payable report - HOTELS & TRANSPORT
+     * Generate payable report - HOTELS, TRANSPORT, ATTRACTION, TOUR TRANSFERS
      */
     public function generateReport($country = 'LK', $targetDate = null, $deadlineDays = 4)
     {
@@ -39,16 +39,18 @@ class PayableReportService
             // Get exchange rate from CBSL
             $exchangeRate = $this->exchangeRateService->getUSDtoLKR();
             
-            // ✅ Get PNL records with items - HOTELS & TRANSPORT
+            // ✅ Get PNL records with items - ALL TYPES
             $records = PnlRecord::where('country_code', $country)
                 ->where('status', 'pending')
                 ->with(['items' => function($query) {
-                    $query->whereIn('type', ['HOTEL', 'TRANSPORT']);
+                    $query->whereIn('type', ['HOTEL', 'TRANSPORT', 'ATTRACTION', 'TOUR TRANSFER']);
                 }])
                 ->get();
             
             $hotels = [];
             $transportGroups = [];
+            $attractions = [];
+            $tourTransfers = [];
             
             foreach ($records as $record) {
                 foreach ($record->items as $item) {
@@ -60,13 +62,10 @@ class PayableReportService
                             $hotels[] = $hotel;
                         }
                     } elseif ($type === 'TRANSPORT') {
-                        // ✅ Group transport by tour_ref
+                        // Group transport by tour_ref
                         $tourRef = $record->tour_ref ?? $record->invoice_number ?? 'N/A';
-                        
-                        // Get start date from item
                         $startDate = $item->start_date ?? $item->check_in_date ?? null;
                         
-                        // Only include if start date matches target
                         if ($startDate) {
                             $startDateStr = date('Y-m-d', strtotime($startDate));
                             if ($startDateStr !== $checkInDateToFind) {
@@ -102,6 +101,17 @@ class PayableReportService
                         
                         $transportGroups[$tourRef]['total_usd'] += $usdAmount;
                         $transportGroups[$tourRef]['total_lkr'] += $lkrAmount;
+                        
+                    } elseif ($type === 'ATTRACTION') {
+                        $attraction = $this->processAttractionItem($item, $record, $exchangeRate, $checkInDateToFind);
+                        if ($attraction) {
+                            $attractions[] = $attraction;
+                        }
+                    } elseif ($type === 'TOUR TRANSFER') {
+                        $tourTransfer = $this->processTourTransferItem($item, $record, $exchangeRate, $checkInDateToFind);
+                        if ($tourTransfer) {
+                            $tourTransfers[] = $tourTransfer;
+                        }
                     }
                 }
             }
@@ -112,8 +122,8 @@ class PayableReportService
                 $transportPayables[] = $this->processTransportGroup($group, $exchangeRate);
             }
             
-            // ✅ Combine hotels and transport
-            $payables = array_merge($hotels, $transportPayables);
+            // ✅ Combine all payables
+            $payables = array_merge($hotels, $transportPayables, $attractions, $tourTransfers);
             
             // Sort by check-in date
             usort($payables, function($a, $b) {
@@ -126,8 +136,8 @@ class PayableReportService
                 'summary' => [
                     'hotels' => count($hotels),
                     'transport' => count($transportPayables),
-                    'attraction' => 0,
-                    'tour_transfers' => 0,
+                    'attraction' => count($attractions),
+                    'tour_transfers' => count($tourTransfers),
                     'meals' => 0,
                 ],
                 'exchange_rate' => $exchangeRate,
@@ -148,81 +158,243 @@ class PayableReportService
         }
     }
     
-// app/Services/PayableReportService.php
-
-/**
- * Process HOTEL items
- */
-protected function processHotelItem($item, $record, $exchangeRate, $checkInDateToFind)
-{
-    try {
-        $hotelName = $item->hotel_name ?? $item->service_name ?? null;
-        
-        if (!$hotelName) {
+    /**
+     * Process HOTEL items
+     */
+    protected function processHotelItem($item, $record, $exchangeRate, $checkInDateToFind)
+    {
+        try {
+            $hotelName = $item->hotel_name ?? $item->service_name ?? null;
+            
+            if (!$hotelName) {
+                return null;
+            }
+            
+            $checkInDate = $item->check_in_date ?? $item->start_date ?? null;
+            if (!$checkInDate) {
+                return null;
+            }
+            
+            $checkInDateStr = date('Y-m-d', strtotime($checkInDate));
+            if ($checkInDateStr !== $checkInDateToFind) {
+                return null;
+            }
+            
+            $usdAmount = $item->amount_original ?? 0;
+            $budgetedLKR = $usdAmount * $exchangeRate;
+            
+            $hotelDetail = HotelDetail::where('hotel_name', 'LIKE', "%{$hotelName}%")
+                ->where('country_code', $record->country_code ?? 'LK')
+                ->first();
+            
+            $checkOutDate = $item->check_out_date ?? $item->end_date ?? null;
+            
+            return [
+                'type' => 'HOTEL',
+                'tour_number' => $record->tour_ref ?? $record->invoice_number ?? null,
+                'invoice_number' => $record->invoice_number ?? null,
+                'vendor_name' => $hotelName,
+                'client_name' => $record->guest_name ?? $record->from_name ?? 'N/A',
+                'agent_name' => $record->agent_name ?? 'N/A',
+                'check_in_date' => $checkInDate,
+                'check_out_date' => $checkOutDate,
+                'usd_amount' => $usdAmount,
+                'budgeted_total' => $budgetedLKR,
+                'exchange_rate' => $exchangeRate,
+                'payable_lkr' => $budgetedLKR,
+                'hold_process' => 'Process',
+                'ac_name' => $hotelDetail->ac_name ?? 'N/A',
+                'bank' => $hotelDetail->bank ?? 'N/A',
+                'account_number' => $hotelDetail->account_number ?? 'N/A',
+                'branch' => $hotelDetail->branch ?? 'N/A',
+                'bank_and_branch' => $hotelDetail->bank_and_branch ?? 'N/A',
+                'swift' => $hotelDetail->swift ?? 'N/A',
+                'advance_percent' => null,
+                'fuel_advance' => null,
+                'tour_advance' => null,
+                'driver_name' => 'N/A',
+                'driver_account' => 'N/A',
+                'driver_bank' => 'N/A',
+                'transport_details' => null,
+                'attraction_details' => null,
+                'tour_transfer_details' => null,
+                'item_id' => $item->id,
+                'record_id' => $record->id,
+            ];
+            
+        } catch (\Exception $e) {
+            Log::error("Error processing hotel item: " . $e->getMessage());
             return null;
         }
-        
-        $checkInDate = $item->check_in_date ?? $item->start_date ?? null;
-        if (!$checkInDate) {
-            return null;
-        }
-        
-        // ✅ Check if check-in date matches target
-        $checkInDateStr = date('Y-m-d', strtotime($checkInDate));
-        if ($checkInDateStr !== $checkInDateToFind) {
-            return null;
-        }
-        
-        $usdAmount = $item->amount_original ?? 0;
-        $budgetedLKR = $usdAmount * $exchangeRate;
-        
-        $hotelDetail = HotelDetail::where('hotel_name', 'LIKE', "%{$hotelName}%")
-            ->where('country_code', $record->country_code ?? 'LK')
-            ->first();
-        
-        $checkOutDate = $item->check_out_date ?? $item->end_date ?? null;
-        
-        return [
-            'type' => 'HOTEL',
-            'tour_number' => $record->tour_ref ?? $record->invoice_number ?? null,
-            'invoice_number' => $record->invoice_number ?? null,
-            'vendor_name' => $hotelName,  // ✅ Hotel Name
-            'client_name' => $record->guest_name ?? $record->from_name ?? 'N/A',
-            'agent_name' => $record->agent_name ?? 'N/A',
-            'check_in_date' => $checkInDate,
-            'check_out_date' => $checkOutDate,
-            'usd_amount' => $usdAmount,
-            'budgeted_total' => $budgetedLKR,
-            'exchange_rate' => $exchangeRate,
-            'payable_lkr' => $budgetedLKR,
-            'hold_process' => 'Process',
-            
-            // Hotel bank details
-            'ac_name' => $hotelDetail->ac_name ?? 'N/A',
-            'bank' => $hotelDetail->bank ?? 'N/A',
-            'account_number' => $hotelDetail->account_number ?? 'N/A',
-            'branch' => $hotelDetail->branch ?? 'N/A',
-            'bank_and_branch' => $hotelDetail->bank_and_branch ?? 'N/A',
-            'swift' => $hotelDetail->swift ?? 'N/A',
-            
-            // Transport fields (N/A for hotels)
-            'advance_percent' => null,
-            'fuel_advance' => null,
-            'tour_advance' => null,
-            'driver_name' => 'N/A',
-            'driver_account' => 'N/A',
-            'driver_bank' => 'N/A',
-            'transport_details' => null,
-            
-            'item_id' => $item->id,
-            'record_id' => $record->id,
-        ];
-        
-    } catch (\Exception $e) {
-        Log::error("Error processing hotel item: " . $e->getMessage());
-        return null;
     }
-}
+    
+    /**
+     * Process ATTRACTION items
+     */
+    protected function processAttractionItem($item, $record, $exchangeRate, $checkInDateToFind)
+    {
+        try {
+            $attractionName = $item->service_name ?? $item->attraction_name ?? null;
+            
+            if (!$attractionName) {
+                return null;
+            }
+            
+            $checkInDate = $item->check_in_date ?? $item->start_date ?? null;
+            if (!$checkInDate) {
+                return null;
+            }
+            
+            $checkInDateStr = date('Y-m-d', strtotime($checkInDate));
+            if ($checkInDateStr !== $checkInDateToFind) {
+                return null;
+            }
+            
+            $usdAmount = $item->amount_original ?? 0;
+            $budgetedLKR = $usdAmount * $exchangeRate;
+            
+            // ✅ Attraction: Deduct LKR 5,000 from total and collect remaining as advance
+            $advanceDeduction = 5000; // LKR 5,000 deduction
+            $totalLKR = $budgetedLKR;
+            $advanceAmount = $totalLKR - $advanceDeduction;
+            
+            // If total is less than 5000, advance is 0
+            if ($advanceAmount < 0) {
+                $advanceAmount = 0;
+            }
+            
+            $checkOutDate = $item->check_out_date ?? $item->end_date ?? null;
+            
+            // Get attraction details from item_details
+            $details = $item->item_details ?? [];
+            $attractionDetails = '';
+            if (isset($details['remarks'])) {
+                $attractionDetails = $details['remarks'];
+            }
+            
+            return [
+                'type' => 'ATTRACTION',
+                'tour_number' => $record->tour_ref ?? $record->invoice_number ?? null,
+                'invoice_number' => $record->invoice_number ?? null,
+                'vendor_name' => $attractionName,
+                'client_name' => $record->guest_name ?? $record->from_name ?? 'N/A',
+                'agent_name' => $record->agent_name ?? 'N/A',
+                'check_in_date' => $checkInDate,
+                'check_out_date' => $checkOutDate,
+                'usd_amount' => $usdAmount,
+                'budgeted_total' => $totalLKR,
+                'exchange_rate' => $exchangeRate,
+                'payable_lkr' => $totalLKR,
+                'hold_process' => 'Process',
+                
+                // ✅ Attraction specific fields
+                'advance_percent' => null,
+                'fuel_advance' => null,
+                'tour_advance' => null,
+                'advance_deduction' => $advanceDeduction,
+                'advance_amount' => $advanceAmount,
+                'attraction_details' => $attractionDetails,
+                
+                // Other fields (N/A)
+                'ac_name' => 'N/A',
+                'bank' => 'N/A',
+                'account_number' => 'N/A',
+                'branch' => 'N/A',
+                'bank_and_branch' => 'N/A',
+                'swift' => 'N/A',
+                'driver_name' => 'N/A',
+                'driver_account' => 'N/A',
+                'driver_bank' => 'N/A',
+                'transport_details' => null,
+                'tour_transfer_details' => null,
+                
+                'item_id' => $item->id,
+                'record_id' => $record->id,
+            ];
+            
+        } catch (\Exception $e) {
+            Log::error("Error processing attraction item: " . $e->getMessage());
+            return null;
+        }
+    }
+    
+    /**
+     * Process TOUR TRANSFER items
+     */
+    protected function processTourTransferItem($item, $record, $exchangeRate, $checkInDateToFind)
+    {
+        try {
+            $transferName = $item->service_name ?? $item->transfer_name ?? null;
+            
+            if (!$transferName) {
+                return null;
+            }
+            
+            $checkInDate = $item->check_in_date ?? $item->start_date ?? null;
+            if (!$checkInDate) {
+                return null;
+            }
+            
+            $checkInDateStr = date('Y-m-d', strtotime($checkInDate));
+            if ($checkInDateStr !== $checkInDateToFind) {
+                return null;
+            }
+            
+            $usdAmount = $item->amount_original ?? 0;
+            $budgetedLKR = $usdAmount * $exchangeRate;
+            
+            $checkOutDate = $item->check_out_date ?? $item->end_date ?? null;
+            
+            // Get transfer details
+            $details = $item->item_details ?? [];
+            $transferDetails = '';
+            if (isset($details['remarks'])) {
+                $transferDetails = $details['remarks'];
+            }
+            
+            return [
+                'type' => 'TOUR TRANSFER',
+                'tour_number' => $record->tour_ref ?? $record->invoice_number ?? null,
+                'invoice_number' => $record->invoice_number ?? null,
+                'vendor_name' => $transferName,
+                'client_name' => $record->guest_name ?? $record->from_name ?? 'N/A',
+                'agent_name' => $record->agent_name ?? 'N/A',
+                'check_in_date' => $checkInDate,
+                'check_out_date' => $checkOutDate,
+                'usd_amount' => $usdAmount,
+                'budgeted_total' => $budgetedLKR,
+                'exchange_rate' => $exchangeRate,
+                'payable_lkr' => $budgetedLKR,
+                'hold_process' => 'Process',
+                
+                // Tour Transfer specific
+                'tour_transfer_details' => $transferDetails,
+                
+                // Other fields (N/A)
+                'ac_name' => 'N/A',
+                'bank' => 'N/A',
+                'account_number' => 'N/A',
+                'branch' => 'N/A',
+                'bank_and_branch' => 'N/A',
+                'swift' => 'N/A',
+                'driver_name' => 'N/A',
+                'driver_account' => 'N/A',
+                'driver_bank' => 'N/A',
+                'advance_percent' => null,
+                'fuel_advance' => null,
+                'tour_advance' => null,
+                'transport_details' => null,
+                'attraction_details' => null,
+                
+                'item_id' => $item->id,
+                'record_id' => $record->id,
+            ];
+            
+        } catch (\Exception $e) {
+            Log::error("Error processing tour transfer item: " . $e->getMessage());
+            return null;
+        }
+    }
     
     /**
      * Process TRANSPORT group - Grouped by Tour
@@ -230,18 +402,15 @@ protected function processHotelItem($item, $record, $exchangeRate, $checkInDateT
     protected function processTransportGroup($group, $exchangeRate)
     {
         try {
-            // ✅ Get driver bank details
             $driverDetail = DriverBankDetail::where('country_code', $group['country_code'] ?? 'LK')
                 ->first();
             
-            // ✅ Calculate advance (30% of total)
             $totalUSD = $group['total_usd'];
             $totalLKR = $group['total_lkr'];
-            $advancePercent = 30; // 30% advance
+            $advancePercent = 30;
             $fuelAdvance = $totalLKR * ($advancePercent / 100);
             $tourAdvance = $totalLKR - $fuelAdvance;
             
-            // ✅ Build transport details string
             $transportDetails = [];
             foreach ($group['items'] as $item) {
                 $transportDetails[] = $item['service_name'] . ': $' . number_format($item['usd_amount'], 2);
@@ -263,7 +432,6 @@ protected function processHotelItem($item, $record, $exchangeRate, $checkInDateT
                 'payable_lkr' => $totalLKR,
                 'hold_process' => 'Process',
                 
-                // ✅ Transport specific fields
                 'advance_percent' => $advancePercent,
                 'fuel_advance' => $fuelAdvance,
                 'tour_advance' => $tourAdvance,
@@ -272,13 +440,14 @@ protected function processHotelItem($item, $record, $exchangeRate, $checkInDateT
                 'driver_bank' => $driverDetail->bank_branch ?? 'N/A',
                 'transport_details' => $transportDetailsStr,
                 
-                // Hotel fields (N/A for transport)
                 'ac_name' => 'N/A',
                 'bank' => $driverDetail->bank_branch ?? 'N/A',
                 'account_number' => $driverDetail->account_number ?? 'N/A',
                 'branch' => $driverDetail->bank_branch ?? 'N/A',
                 'bank_and_branch' => $driverDetail->bank_branch ?? 'N/A',
                 'swift' => 'N/A',
+                'attraction_details' => null,
+                'tour_transfer_details' => null,
                 
                 'record_id' => $group['record_id'],
             ];

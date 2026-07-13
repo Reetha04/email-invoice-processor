@@ -217,6 +217,7 @@
                     <div class="table-section mt-5">
                         <div class="table-header bg-success text-white p-2 rounded-top">
                             <h5 class="mb-0"><i class="fas fa-truck me-2"></i> Transport Payables</h5>
+                            <small class="ms-3">Collect 30% of the transport payment in advance to cover fuel expenses</small>
                         </div>
                         <div class="table-responsive">
                             <table class="table table-bordered table-hover table-striped" id="transportTable">
@@ -277,6 +278,138 @@
                         No Transport records found for the selected date.
                     </div>
                     @endif
+
+                    <!-- ============================================ -->
+                    <!-- ✅ ATTRACTION TABLE -->
+                    <!-- ============================================ -->
+                    @php
+                        $attractions = array_filter($payables, function($p) {
+                            return $p['type'] == 'ATTRACTION';
+                        });
+                    @endphp
+                    
+                    @if(!empty($attractions))
+                    <div class="table-section mt-5">
+                        <div class="table-header bg-warning text-white p-2 rounded-top">
+                            <h5 class="mb-0"><i class="fas fa-ticket-alt me-2"></i> Attraction Payables</h5>
+                            <small class="ms-3">Deduct LKR 5,000 from the total attraction cost and collect the remaining amount in full as the advance payment</small>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-hover table-striped" id="attractionTable">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Date</th>
+                                        <th>Tour</th>
+                                        <th>Invoice</th>
+                                        <th>Attraction</th>
+                                        <th>Client</th>
+                                        <th>Agent</th>
+                                        <th>USD</th>
+                                        <th>Total LKR</th>
+                                        <th>Deduction</th>
+                                        <th>Advance LKR</th>
+                                        <th>Hold/Process</th>
+                                        <th>Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach($attractions as $index => $payable)
+                                        <tr>
+                                            <td>{{ $index + 1 }}</td>
+                                            <td>{{ $payable['check_in_date'] ?? '-' }}</td>
+                                            <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['invoice_number'] ?? 'N/A' }}</td>
+                                            <td><strong>{{ $payable['vendor_name'] ?? 'N/A' }}</strong></td>
+                                            <td>{{ $payable['client_name'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['agent_name'] ?? 'N/A' }}</td>
+                                            <td>${{ number_format($payable['usd_amount'] ?? 0, 2) }}</td>
+                                            <td>LKR {{ number_format($payable['budgeted_total'] ?? 0, 2) }}</td>
+                                            <td><span class="badge bg-danger">- LKR 5,000</span></td>
+                                            <td><strong>LKR {{ number_format($payable['advance_amount'] ?? 0, 2) }}</strong></td>
+                                            <td>
+                                                <span class="badge bg-success">Process</span>
+                                            </td>
+                                            <td>
+                                                <small class="text-muted">{{ $payable['attraction_details'] ?? '-' }}</small>
+                                            </td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    @else
+                    <div class="alert alert-warning mt-4">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        No Attraction records found for the selected date.
+                    </div>
+                    @endif
+
+                    <!-- ============================================ -->
+                    <!-- ✅ TOUR TRANSFER TABLE -->
+                    <!-- ============================================ -->
+                    @php
+                        $tourTransfers = array_filter($payables, function($p) {
+                            return $p['type'] == 'TOUR TRANSFER';
+                        });
+                    @endphp
+                    
+                    @if(!empty($tourTransfers))
+                    <div class="table-section mt-5">
+                        <div class="table-header bg-danger text-white p-2 rounded-top">
+                            <h5 class="mb-0"><i class="fas fa-exchange-alt me-2"></i> Tour Transfer Payables</h5>
+                            <small class="ms-3">Guide: Collect only the guide's accommodation cost as the advance payment</small>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-hover table-striped" id="tourTransferTable">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Date</th>
+                                        <th>Tour</th>
+                                        <th>Invoice</th>
+                                        <th>Transfer</th>
+                                        <th>Client</th>
+                                        <th>Agent</th>
+                                        <th>USD</th>
+                                        <th>Total LKR</th>
+                                        <th>Payable LKR</th>
+                                        <th>Hold/Process</th>
+                                        <th>Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach($tourTransfers as $index => $payable)
+                                        <tr>
+                                            <td>{{ $index + 1 }}</td>
+                                            <td>{{ $payable['check_in_date'] ?? '-' }}</td>
+                                            <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['invoice_number'] ?? 'N/A' }}</td>
+                                            <td><strong>{{ $payable['vendor_name'] ?? 'N/A' }}</strong></td>
+                                            <td>{{ $payable['client_name'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['agent_name'] ?? 'N/A' }}</td>
+                                            <td>${{ number_format($payable['usd_amount'] ?? 0, 2) }}</td>
+                                            <td>LKR {{ number_format($payable['budgeted_total'] ?? 0, 2) }}</td>
+                                            <td><strong>LKR {{ number_format($payable['payable_lkr'] ?? 0, 2) }}</strong></td>
+                                            <td>
+                                                <span class="badge bg-success">Process</span>
+                                            </td>
+                                            <td>
+                                                <small class="text-muted">{{ $payable['tour_transfer_details'] ?? '-' }}</small>
+                                            </td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    @else
+                    <div class="alert alert-warning mt-4">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        No Tour Transfer records found for the selected date.
+                    </div>
+                    @endif
                     
                 </div>
                 <div class="card-footer">
@@ -303,6 +436,20 @@
         });
         
         $('#transportTable').DataTable({
+            pageLength: 25,
+            scrollX: true,
+            autoWidth: false,
+            order: [[0, 'asc']],
+        });
+        
+        $('#attractionTable').DataTable({
+            pageLength: 25,
+            scrollX: true,
+            autoWidth: false,
+            order: [[0, 'asc']],
+        });
+        
+        $('#tourTransferTable').DataTable({
             pageLength: 25,
             scrollX: true,
             autoWidth: false,
@@ -349,6 +496,12 @@
         font-size: 0.75rem;
         text-transform: uppercase;
         letter-spacing: 0.3px;
+    }
+    .table-warning {
+        background-color: #fff3cd !important;
+    }
+    .table-danger {
+        background-color: #f8d7da !important;
     }
 </style>
 @endsection
