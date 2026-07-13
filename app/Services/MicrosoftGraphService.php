@@ -843,9 +843,9 @@ protected function sendInvoiceEmail($invoice)
         }
         
         // Send email
-        // Mail::to('kevinraj@aahaas.com')
-        //     ->cc('raja.lakshmi@aahaas.com')
-        //     ->send(new InvoiceMail($invoice, $emailType));
+        Mail::to('kevinraj@aahaas.com')
+            ->cc('raja.lakshmi@aahaas.com')
+            ->send(new InvoiceMail($invoice, $emailType));
         
         Log::info("📧 Invoice email sent for: " . $invoice->invoice_number);
         

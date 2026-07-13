@@ -55,8 +55,8 @@ public function envelope(): Envelope
     
     return new Envelope(
         subject: "{$subject} ({$agentName})",
-        // to: ['kevinraj@aahaas.com'],
-        // cc: ['raja.lakshmi@aahaas.com'],
+        to: ['kevinraj@aahaas.com'],
+        cc: ['raja.lakshmi@aahaas.com'],
     );
 }
 
