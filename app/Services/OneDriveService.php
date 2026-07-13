@@ -990,7 +990,7 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
         Log::info("  - Total Amount: " . ($extractedData['total_amount'] ?? 'NULL'));
         Log::info("  - Currency: " . ($extractedData['currency'] ?? 'NULL'));
         
-        // Save to staging
+        // ✅✅✅ FIX: Create import record FIRST
         $import = OneDriveImport::create([
             'folder_name' => $folderName,
             'invoice_number' => $invoiceNumber,
@@ -1009,10 +1009,13 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
             'currency' => $extractedData['currency'] ?? 'MYR',
         ]);
         
-        Log::info("✅ Saved to OneDriveImport with total_amount: " . ($extractedData['total_amount'] ?? 'NULL'));
+        Log::info("✅ Saved to OneDriveImport with ID: {$import->id}");
+        Log::info("💰 Saved with total_amount: " . ($extractedData['total_amount'] ?? 'NULL'));
         
-        // Process immediately
+        // ✅ Process the import record
         $this->processStagingRecord($import->id);
+        
+        // ✅ Get the created record
         $record = PnlRecord::where('invoice_number', $invoiceNumber)->first();
         $recordId = $record ? $record->id : null;
         
@@ -1029,16 +1032,21 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
     } catch (\Exception $e) {
         Log::error("Error processing: " . $e->getMessage());
         
-        OneDriveImport::create([
-            'folder_name' => $folderName,
-            'invoice_number' => $invoiceNumber,
-            'country_code' => $country,
-            'month_folder' => $this->monthFolders[date('m')],
-            'date_folder' => date('d') . ' July',
-            'status' => 'failed',
-            'error_message' => $e->getMessage(),
-            'processed_at' => now(),
-        ]);
+        // ✅ Try to create a failed import record
+        try {
+            OneDriveImport::create([
+                'folder_name' => $folderName,
+                'invoice_number' => $invoiceNumber,
+                'country_code' => $country,
+                'month_folder' => $this->monthFolders[date('m')] ?? 'Unknown',
+                'date_folder' => date('d') . ' July',
+                'status' => 'failed',
+                'error_message' => $e->getMessage(),
+                'processed_at' => now(),
+            ]);
+        } catch (\Exception $inner) {
+            Log::error("Failed to create import record: " . $inner->getMessage());
+        }
         
         return [
             'folder' => $folderName,
