@@ -650,19 +650,16 @@ protected function createPnlRecordFromPNL($pnlFile, $folderPath, $folderName, $i
     $totalAmount = $this->extractTotalAmountFromPNL($text);
     $pax = $this->extractPaxFromPNL($text);
     $nights = $this->extractNightsFromPNL($text);
-     $agentName = $data['agent_name'] ?? null;
-        if (empty($agentName)) {
-            // Try to get from folder name
-            $agentName = $this->extractFileHandlerFromFolderName($import->folder_name);
-        }
-        if (empty($agentName)) {
-            $agentName = 'Unknown Agent'; // ✅ DEFAULT VALUE
-        }
-        
-        $guestName = $data['guest_name'] ?? null;
-        if (empty($guestName)) {
-            $guestName = 'Unknown Guest'; // ✅ DEFAULT VALUE
-        }
+     if (empty($agentName)) {
+        $agentName = $this->extractFileHandlerFromFolderName($folderName);
+    }
+    if (empty($agentName)) {
+        $agentName = '-';
+    }
+    
+    if (empty($guestName)) {
+        $guestName = '-';
+    }
     // Create record
     $record = PnlRecord::create([
         'invoice_number' => $invoiceNumber,
@@ -990,7 +987,7 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
         Log::info("  - Total Amount: " . ($extractedData['total_amount'] ?? 'NULL'));
         Log::info("  - Currency: " . ($extractedData['currency'] ?? 'NULL'));
         
-        // ✅✅✅ FIX: Create import record FIRST
+        // Save to staging
         $import = OneDriveImport::create([
             'folder_name' => $folderName,
             'invoice_number' => $invoiceNumber,
@@ -1009,13 +1006,10 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
             'currency' => $extractedData['currency'] ?? 'MYR',
         ]);
         
-        Log::info("✅ Saved to OneDriveImport with ID: {$import->id}");
-        Log::info("💰 Saved with total_amount: " . ($extractedData['total_amount'] ?? 'NULL'));
+        Log::info("✅ Saved to OneDriveImport with total_amount: " . ($extractedData['total_amount'] ?? 'NULL'));
         
-        // ✅ Process the import record
+        // Process immediately
         $this->processStagingRecord($import->id);
-        
-        // ✅ Get the created record
         $record = PnlRecord::where('invoice_number', $invoiceNumber)->first();
         $recordId = $record ? $record->id : null;
         
@@ -1032,21 +1026,16 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
     } catch (\Exception $e) {
         Log::error("Error processing: " . $e->getMessage());
         
-        // ✅ Try to create a failed import record
-        try {
-            OneDriveImport::create([
-                'folder_name' => $folderName,
-                'invoice_number' => $invoiceNumber,
-                'country_code' => $country,
-                'month_folder' => $this->monthFolders[date('m')] ?? 'Unknown',
-                'date_folder' => date('d') . ' July',
-                'status' => 'failed',
-                'error_message' => $e->getMessage(),
-                'processed_at' => now(),
-            ]);
-        } catch (\Exception $inner) {
-            Log::error("Failed to create import record: " . $inner->getMessage());
-        }
+        OneDriveImport::create([
+            'folder_name' => $folderName,
+            'invoice_number' => $invoiceNumber,
+            'country_code' => $country,
+            'month_folder' => $this->monthFolders[date('m')],
+            'date_folder' => date('d') . ' July',
+            'status' => 'failed',
+            'error_message' => $e->getMessage(),
+            'processed_at' => now(),
+        ]);
         
         return [
             'folder' => $folderName,
