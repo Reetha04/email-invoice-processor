@@ -3746,4 +3746,5 @@ private function getCreditTypeFromIncomingEmail($tourRef, $invoiceNumber)
         return 'Credit';
     }
 }
+
 }

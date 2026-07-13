@@ -1,0 +1,20 @@
+<?php
+// app/Models/HotelBankDetail.php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class MalaysiaHotelBankDetail extends Model
+{
+    protected $fillable = [
+        'hotel_name',
+        'ac_name',
+        'account_number',
+        'bank',
+        'branch',
+        'swift_code',
+        'uen',
+        'country_code'
+    ];
+}

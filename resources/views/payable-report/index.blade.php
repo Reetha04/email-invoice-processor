@@ -154,42 +154,58 @@
                             <table class="table table-bordered table-hover table-striped" id="hotelTable">
                                 <thead class="table-dark">
                                     <tr>
-                                        <th>#</th>
-                                        <th>Date</th>
+                                        <th>CNTL</th>
                                         <th>Tour</th>
                                         <th>Invoice</th>
-                                        <th>Hotel Name</th>
                                         <th>Paid Amount</th>
                                         <th>Balance</th>
+                                        <th>Start Date</th>
+                                        <th>End Date</th>
+                                        <th>Check out date</th>
+                                        <th>Agent Type</th>
                                         <th>Agent</th>
-                                        <th>Payable LKR</th>
-                                        <th>Hold/Process</th>
+                                        <th>Client</th>
+                                        <th>Hotel</th>
+                                        <th>USD</th>
+                                        <th>Budgeted Total</th>
+                                        <th>Exchange Rate</th>
+                                        <th>Payable</th>
+                                        <th>Hold / Process</th>
                                         <th>A/C Name</th>
                                         <th>Bank</th>
-                                        <th>A/C No.</th>
+                                        <th>A/C Number</th>
                                         <th>Branch</th>
+                                        <th>Bank and Branch</th>
                                         <th>SWIFT</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     @foreach($hotels as $index => $payable)
                                         <tr>
-                                            <td>{{ $index + 1 }}</td>
-                                            <td>{{ $payable['check_in_date'] ?? '-' }}</td>
+                                            <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['invoice_number'] ?? 'N/A' }}</td>
-                                            <td><strong>{{ $payable['vendor_name'] ?? 'N/A' }}</strong></td>
                                             <td>${{ number_format($payable['usd_amount'] ?? 0, 2) }}</td>
                                             <td>LKR {{ number_format($payable['payable_lkr'] ?? 0, 2) }}</td>
+                                            <td>{{ isset($payable['start_date']) && $payable['start_date'] ? date('Y-m-d', strtotime($payable['start_date'])) : '-' }}</td>
+                                            <td>{{ isset($payable['end_date']) && $payable['end_date'] ? date('Y-m-d', strtotime($payable['end_date'])) : '-' }}</td>
+                                            <td>{{ isset($payable['check_out_date']) && $payable['check_out_date'] ? date('Y-m-d', strtotime($payable['check_out_date'])) : '-' }}</td>
+                                            <td>{{ $payable['agent_type'] ?? 'Credit' }}</td>
                                             <td>{{ $payable['agent_name'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['client_name'] ?? 'N/A' }}</td>
+                                            <td><strong>{{ $payable['vendor_name'] ?? 'N/A' }}</strong></td>
+                                            <td>${{ number_format($payable['usd_amount'] ?? 0, 2) }}</td>
+                                            <td>LKR {{ number_format($payable['budgeted_total'] ?? 0, 2) }}</td>
+                                            <td>{{ number_format($payable['exchange_rate'] ?? 0, 2) }}</td>
                                             <td><strong>LKR {{ number_format($payable['payable_lkr'] ?? 0, 2) }}</strong></td>
                                             <td>
-                                                <span class="badge bg-success">Process</span>
+                                                <span class="badge bg-success">{{ $payable['hold_process'] ?? 'Process' }}</span>
                                             </td>
                                             <td>{{ $payable['ac_name'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['bank'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['account_number'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['branch'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['bank_and_branch'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['swift'] ?? 'N/A' }}</td>
                                         </tr>
                                     @endforeach
@@ -217,36 +233,33 @@
                     <div class="table-section mt-5">
                         <div class="table-header bg-success text-white p-2 rounded-top">
                             <h5 class="mb-0"><i class="fas fa-truck me-2"></i> Transport Payables</h5>
-                            <small class="ms-3">Collect 30% of the transport payment in advance to cover fuel expenses</small>
+                            <small class="ms-3">Collect 30% of the transport payment in advance to cover fuel expenses.</small>
                         </div>
                         <div class="table-responsive">
                             <table class="table table-bordered table-hover table-striped" id="transportTable">
                                 <thead class="table-dark">
                                     <tr>
-                                        <th>#</th>
                                         <th>Date</th>
-                                        <th>Tour</th>
+                                        <th>Tour Number</th>
                                         <th>Invoice</th>
                                         <th>Paid Amount</th>
-                                        <th>Balance</th>
+                                        <th>balance</th>
                                         <th>Agent</th>
                                         <th>Advance %</th>
                                         <th>Fuel Advance</th>
                                         <th>Tour Advance</th>
-                                        <th>Payable LKR</th>
-                                        <th>Hold/Process</th>
+                                        <th>Payable</th>
+                                        <th>Process or Hold</th>
                                         <th>Driver Name</th>
                                         <th>A/C Name</th>
-                                        <th>A/C No.</th>
-                                        <th>Bank & Branch</th>
-                                        <th>Transport Details</th>
+                                        <th>A/C Number</th>
+                                        <th>Bank and Branch</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     @foreach($transports as $index => $payable)
                                         <tr>
-                                            <td>{{ $index + 1 }}</td>
-                                            <td>{{ $payable['check_in_date'] ?? '-' }}</td>
+                                            <td>{{ isset($payable['start_date']) && $payable['start_date'] ? date('Y-m-d', strtotime($payable['start_date'])) : '-' }}</td>
                                             <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['invoice_number'] ?? 'N/A' }}</td>
                                             <td>${{ number_format($payable['usd_amount'] ?? 0, 2) }}</td>
@@ -257,15 +270,12 @@
                                             <td>LKR {{ number_format($payable['tour_advance'] ?? 0, 2) }}</td>
                                             <td><strong>LKR {{ number_format($payable['payable_lkr'] ?? 0, 2) }}</strong></td>
                                             <td>
-                                                <span class="badge bg-success">Process</span>
+                                                <span class="badge bg-success">{{ $payable['hold_process'] ?? 'Process' }}</span>
                                             </td>
                                             <td>{{ $payable['driver_name'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['driver_name'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['driver_account'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['driver_bank'] ?? 'N/A' }}</td>
-                                            <td>
-                                                <small class="text-muted">{{ $payable['transport_details'] ?? 'N/A' }}</small>
-                                            </td>
                                         </tr>
                                     @endforeach
                                 </tbody>
@@ -292,7 +302,7 @@
                     <div class="table-section mt-5">
                         <div class="table-header bg-warning text-white p-2 rounded-top">
                             <h5 class="mb-0"><i class="fas fa-ticket-alt me-2"></i> Attraction Payables</h5>
-                            <small class="ms-3">Deduct LKR 5,000 from the total attraction cost and collect the remaining amount in full as the advance payment</small>
+                            <small class="ms-3">Deduct LKR 5,000 from the total attraction cost and collect the remaining amount in full as the advance payment.</small>
                         </div>
                         <div class="table-responsive">
                             <table class="table table-bordered table-hover table-striped" id="attractionTable">
@@ -317,7 +327,7 @@
                                     @foreach($attractions as $index => $payable)
                                         <tr>
                                             <td>{{ $index + 1 }}</td>
-                                            <td>{{ $payable['check_in_date'] ?? '-' }}</td>
+                                            <td>{{ isset($payable['start_date']) && $payable['start_date'] ? date('Y-m-d', strtotime($payable['start_date'])) : '-' }}</td>
                                             <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['invoice_number'] ?? 'N/A' }}</td>
                                             <td><strong>{{ $payable['vendor_name'] ?? 'N/A' }}</strong></td>
@@ -328,7 +338,7 @@
                                             <td><span class="badge bg-danger">- LKR 5,000</span></td>
                                             <td><strong>LKR {{ number_format($payable['advance_amount'] ?? 0, 2) }}</strong></td>
                                             <td>
-                                                <span class="badge bg-success">Process</span>
+                                                <span class="badge bg-success">{{ $payable['hold_process'] ?? 'Process' }}</span>
                                             </td>
                                             <td>
                                                 <small class="text-muted">{{ $payable['attraction_details'] ?? '-' }}</small>
@@ -359,7 +369,7 @@
                     <div class="table-section mt-5">
                         <div class="table-header bg-danger text-white p-2 rounded-top">
                             <h5 class="mb-0"><i class="fas fa-exchange-alt me-2"></i> Tour Transfer Payables</h5>
-                            <small class="ms-3">Guide: Collect only the guide's accommodation cost as the advance payment</small>
+                            <small class="ms-3">Guide: Collect only the guide's accommodation cost as the advance payment.</small>
                         </div>
                         <div class="table-responsive">
                             <table class="table table-bordered table-hover table-striped" id="tourTransferTable">
@@ -374,6 +384,9 @@
                                         <th>Agent</th>
                                         <th>USD</th>
                                         <th>Total LKR</th>
+                                        <th>Advance %</th>
+                                        <th>Advance LKR</th>
+                                        <th>Balance LKR</th>
                                         <th>Payable LKR</th>
                                         <th>Hold/Process</th>
                                         <th>Details</th>
@@ -383,7 +396,7 @@
                                     @foreach($tourTransfers as $index => $payable)
                                         <tr>
                                             <td>{{ $index + 1 }}</td>
-                                            <td>{{ $payable['check_in_date'] ?? '-' }}</td>
+                                            <td>{{ isset($payable['start_date']) && $payable['start_date'] ? date('Y-m-d', strtotime($payable['start_date'])) : '-' }}</td>
                                             <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
                                             <td>{{ $payable['invoice_number'] ?? 'N/A' }}</td>
                                             <td><strong>{{ $payable['vendor_name'] ?? 'N/A' }}</strong></td>
@@ -391,9 +404,12 @@
                                             <td>{{ $payable['agent_name'] ?? 'N/A' }}</td>
                                             <td>${{ number_format($payable['usd_amount'] ?? 0, 2) }}</td>
                                             <td>LKR {{ number_format($payable['budgeted_total'] ?? 0, 2) }}</td>
+                                            <td>{{ $payable['advance_percent'] ?? 20 }}%</td>
+                                            <td>LKR {{ number_format($payable['advance_amount'] ?? 0, 2) }}</td>
+                                            <td>LKR {{ number_format($payable['balance_amount'] ?? 0, 2) }}</td>
                                             <td><strong>LKR {{ number_format($payable['payable_lkr'] ?? 0, 2) }}</strong></td>
                                             <td>
-                                                <span class="badge bg-success">Process</span>
+                                                <span class="badge bg-success">{{ $payable['hold_process'] ?? 'Process' }}</span>
                                             </td>
                                             <td>
                                                 <small class="text-muted">{{ $payable['tour_transfer_details'] ?? '-' }}</small>
@@ -408,6 +424,72 @@
                     <div class="alert alert-warning mt-4">
                         <i class="fas fa-exclamation-triangle me-2"></i>
                         No Tour Transfer records found for the selected date.
+                    </div>
+                    @endif
+
+                    <!-- ============================================ -->
+                    <!-- ✅ MEALS TABLE -->
+                    <!-- ============================================ -->
+                    @php
+                        $meals = array_filter($payables, function($p) {
+                            return $p['type'] == 'MEALS';
+                        });
+                    @endphp
+                    
+                    @if(!empty($meals))
+                    <div class="table-section mt-5">
+                        <div class="table-header bg-secondary text-white p-2 rounded-top">
+                            <h5 class="mb-0"><i class="fas fa-utensils me-2"></i> Meals Payables</h5>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-hover table-striped" id="mealTable">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th>CNTL</th>
+                                        <th>Tour</th>
+                                        <th>Invoice</th>
+                                        <th>Paid Amount</th>
+                                        <th>Balance</th>
+                                        <th>Start</th>
+                                        <th>End</th>
+                                        <th>Type</th>
+                                        <th>Agent</th>
+                                        <th>Client</th>
+                                        <th>Cost</th>
+                                        <th>Payable</th>
+                                        <th>A/C Name</th>
+                                        <th>Bank</th>
+                                        <th>A/C Number</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach($meals as $index => $payable)
+                                        <tr>
+                                            <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['tour_number'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['invoice_number'] ?? 'N/A' }}</td>
+                                            <td>${{ number_format($payable['usd_amount'] ?? 0, 2) }}</td>
+                                            <td>LKR {{ number_format($payable['payable_lkr'] ?? 0, 2) }}</td>
+                                            <td>{{ isset($payable['start_date']) && $payable['start_date'] ? date('Y-m-d', strtotime($payable['start_date'])) : '-' }}</td>
+                                            <td>{{ isset($payable['end_date']) && $payable['end_date'] ? date('Y-m-d', strtotime($payable['end_date'])) : '-' }}</td>
+                                            <td>{{ $payable['type'] ?? 'MEALS' }}</td>
+                                            <td>{{ $payable['agent_name'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['client_name'] ?? 'N/A' }}</td>
+                                            <td>${{ number_format($payable['usd_amount'] ?? 0, 2) }}</td>
+                                            <td><strong>LKR {{ number_format($payable['payable_lkr'] ?? 0, 2) }}</strong></td>
+                                            <td>{{ $payable['ac_name'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['bank'] ?? 'N/A' }}</td>
+                                            <td>{{ $payable['account_number'] ?? 'N/A' }}</td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    @else
+                    <div class="alert alert-warning mt-4">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        No Meals records found for the selected date.
                     </div>
                     @endif
                     
@@ -450,6 +532,13 @@
         });
         
         $('#tourTransferTable').DataTable({
+            pageLength: 25,
+            scrollX: true,
+            autoWidth: false,
+            order: [[0, 'asc']],
+        });
+        
+        $('#mealTable').DataTable({
             pageLength: 25,
             scrollX: true,
             autoWidth: false,

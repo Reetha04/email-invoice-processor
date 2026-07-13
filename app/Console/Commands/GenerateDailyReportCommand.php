@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Models\GeneratedInvoice;
 use App\Models\IncomingEmail;
 use App\Services\MicrosoftGraphService;
+use App\Services\ExchangeRateService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -18,6 +19,14 @@ class GenerateDailyReportCommand extends Command
 {
     protected $signature = 'report:daily {--date=} {--upload} {--email=}';
     protected $description = 'Generate daily invoice report and upload to OneDrive';
+
+    protected $exchangeRateService;
+
+    public function __construct(ExchangeRateService $exchangeRateService)
+    {
+        parent::__construct();
+        $this->exchangeRateService = $exchangeRateService;
+    }
 
     public function handle()
     {
@@ -37,13 +46,10 @@ class GenerateDailyReportCommand extends Command
             
             $this->info("✅ Report generated: {$filePath}");
             
-            // ✅ ONLY ONE EMAIL with attachment (removed separate notification)
             $this->sendEmailWithAttachment($filePath, $date, $emailTo);
             
             if ($upload) {
                 $uploadSuccess = $this->uploadToOneDrive($filePath, $date);
-                
-                // ✅ REMOVED: sendNotificationEmail($date);
                 if ($uploadSuccess) {
                     $this->info("✅ Uploaded to OneDrive successfully");
                 }
@@ -59,9 +65,6 @@ class GenerateDailyReportCommand extends Command
         }
     }
 
-    /**
-     * ✅ Send Excel file as email attachment (ONLY ONE EMAIL)
-     */
     protected function sendEmailWithAttachment($filePath, $date, $to)
     {
         try {
@@ -75,7 +78,6 @@ class GenerateDailyReportCommand extends Command
             $message .= "📄 File: {$filename}\n";
             $message .= "📅 Date: {$formattedDate}\n\n";
             
-            // ✅ Added OneDrive info if uploaded
             if ($this->option('upload')) {
                 $message .= "📁 This report has also been uploaded to the shared OneDrive folder.\n\n";
             }
@@ -104,8 +106,6 @@ class GenerateDailyReportCommand extends Command
         }
     }
 
-
-    // ✅ Helper to sanitize strings
     protected function sanitizeString($string)
     {
         if (is_null($string)) {
@@ -118,6 +118,64 @@ class GenerateDailyReportCommand extends Command
         
         $string = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $string);
         return trim($string);
+    }
+
+    /**
+     * ✅ Convert any currency to USD
+     */
+    protected function convertToUSD($amount, $currency)
+    {
+        // If amount is 0 or null, return 0
+        if (empty($amount) || $amount == 0) {
+            return 0;
+        }
+
+        // If already USD, return the amount as-is
+        if (strtoupper($currency) === 'USD') {
+            return $amount;
+        }
+
+        try {
+            // Get rate from currency to INR using ExchangeRateService
+            $inrRate = $this->exchangeRateService->getRate($currency, 'INR');
+            
+            // Get USD to INR rate
+            $usdToInrRate = $this->exchangeRateService->getUsdToInrRate();
+            
+            // Convert to INR first, then to USD
+            $amountInInr = $amount * $inrRate;
+            $usdAmount = $amountInInr / $usdToInrRate;
+            
+            Log::info("USD Conversion: {$amount} {$currency} → {$amountInInr} INR → {$usdAmount} USD (Rate: {$inrRate}, USD/INR: {$usdToInrRate})");
+            
+            return $usdAmount;
+            
+        } catch (\Exception $e) {
+            Log::warning("Could not get exchange rate for currency: {$currency}, Error: " . $e->getMessage());
+            
+            // ✅ Fallback: Direct rates to USD
+            $fallbackRates = [
+                'LKR' => 0.0030,   // 1 LKR = 0.0030 USD
+                'INR' => 0.0120,   // 1 INR = 0.0120 USD
+                'EUR' => 1.09,
+                'GBP' => 1.27,
+                'SGD' => 0.74,
+                'MYR' => 0.21,
+                'VND' => 0.000039,
+                'AED' => 0.27,
+                'SAR' => 0.27,
+                'QAR' => 0.27,
+                'KWD' => 3.26,
+                'BHD' => 2.65,
+            ];
+
+            $rate = $fallbackRates[strtoupper($currency)] ?? 1;
+            $usdAmount = $amount * $rate;
+            
+            Log::info("USD Conversion (fallback): {$amount} {$currency} → {$usdAmount} USD");
+            
+            return $usdAmount;
+        }
     }
 
     protected function generateReport($date)
@@ -137,16 +195,17 @@ class GenerateDailyReportCommand extends Command
         $spreadsheet = new Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         
-        // ✅ ADDED: Agent ID column after Agent Name
+        // ✅ Headers: Added USD Amount column
         $headers = [
             'S.No', 
             'Invoice #', 
             'Tour Ref', 
             'Agent Name', 
-            'Agent ID',      // ← NEW COLUMN
+            'Agent ID',
             'Guest Name',
             'Amount', 
-            'Currency', 
+            'Currency',
+            'USD Amount',     // ← NEW COLUMN - USD equivalent for all invoices
             'File Handler', 
             'Tour Start Date',
             'Travel Date', 
@@ -166,21 +225,25 @@ class GenerateDailyReportCommand extends Command
         $row = 2;
         $sno = 1;
         $totalAmount = 0;
+        $totalUSD = 0;
         
         foreach ($latestInvoices as $invoice) {
             $col = 'A';
+            $amount = $invoice->grand_total ?? 0;
+            $currency = $invoice->currency ?? 'USD';
+            
+            // ✅ Convert to USD
+            $usdAmount = $this->convertToUSD($amount, $currency);
+            
             $sheet->setCellValue($col++ . $row, $sno++);
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->invoice_number));
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->tour_ref));
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->customer_name));
-            
-            // ✅ ADDED: Agent ID from email reference_no
-            $agentId = $invoice->email->reference_no ?? 'NA';
-            $sheet->setCellValue($col++ . $row, $this->sanitizeString($agentId));
-            
+            $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->email->reference_no ?? 'NA'));
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->guest_name));
-            $sheet->setCellValue($col++ . $row, $invoice->grand_total);
-            $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->currency));
+            $sheet->setCellValue($col++ . $row, $amount);
+            $sheet->setCellValue($col++ . $row, $this->sanitizeString($currency));
+            $sheet->setCellValue($col++ . $row, number_format($usdAmount, 2));    // ✅ USD Amount
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($invoice->email->file_handler ?? 'NA'));
             $sheet->setCellValue($col++ . $row, $invoice->email->travel_start_date ? date('d/m/Y', strtotime($invoice->email->travel_start_date)) : 'NA');
             $sheet->setCellValue($col++ . $row, $this->sanitizeString($this->getTravelDates($invoice->email)));
@@ -189,18 +252,20 @@ class GenerateDailyReportCommand extends Command
             $sheet->setCellValue($col++ . $row, $invoice->is_revision ? 'R' . $invoice->revision_number : 'Original');
             $sheet->setCellValue($col++ . $row, $invoice->created_at->format('d/m/Y H:i'));
             
-            $totalAmount += $invoice->grand_total;
+            $totalAmount += $amount;
+            $totalUSD += $usdAmount;
             $row++;
         }
         
+        // ✅ Summary Row
         $row++;
         $sheet->setCellValue('A' . $row, 'TOTAL');
-        // ✅ FIX: Column for Total is now 'G' (because we added Agent ID column)
-        $sheet->setCellValue('G' . $row, $totalAmount);
-        $sheet->getStyle('A' . $row . ':O' . $row)->getFont()->setBold(true); // Updated to O (15 columns)
+        $sheet->setCellValue('G' . $row, $totalAmount);        // Amount column (G)
+        $sheet->setCellValue('I' . $row, number_format($totalUSD, 2));   // USD Amount column (I)
+        $sheet->getStyle('A' . $row . ':P' . $row)->getFont()->setBold(true);
         
-        // ✅ UPDATE: Auto-size all columns (A to O)
-        foreach (range('A', 'O') as $col) {
+        // ✅ Auto-size all columns (A to P = 16 columns)
+        foreach (range('A', 'P') as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
         
@@ -241,62 +306,62 @@ class GenerateDailyReportCommand extends Command
         return $filePath;
     }
 
-protected function getLatestRevisions($invoices)
-{
-    $grouped = [];
-    $baseKeysWithRevisions = [];
-    
-    // First pass: Find which invoices have revisions
-    foreach ($invoices as $invoice) {
-        $baseKey = $this->getInvoiceBaseNumber($invoice);
-        if ($invoice->is_revision) {
-            $baseKeysWithRevisions[$baseKey] = true;
-        }
-    }
-    
-    // Second pass: For each invoice, decide what to keep
-    foreach ($invoices as $invoice) {
-        $baseKey = $this->getInvoiceBaseNumber($invoice);
+    protected function getLatestRevisions($invoices)
+    {
+        $grouped = [];
+        $baseKeysWithRevisions = [];
         
-        // Case 1: This invoice has revisions (there's at least one revision for this base)
-        if (isset($baseKeysWithRevisions[$baseKey])) {
-            // If this is the original (is_revision = false), SKIP it
-            if (!$invoice->is_revision) {
-                continue;
-            }
-            
-            // If this is a revision, keep only the latest one
-            if (!isset($grouped[$baseKey]) || $invoice->revision_number > $grouped[$baseKey]->revision_number) {
-                $grouped[$baseKey] = $invoice;
-            }
-        } 
-        // Case 2: No revisions for this invoice, keep the original
-        else {
-            // Only keep if it's the original (no revision suffix)
-            if (!$invoice->is_revision) {
-                $grouped[$baseKey] = $invoice;
+        // First pass: Find which invoices have revisions
+        foreach ($invoices as $invoice) {
+            $baseKey = $this->getInvoiceBaseNumber($invoice);
+            if ($invoice->is_revision) {
+                $baseKeysWithRevisions[$baseKey] = true;
             }
         }
+        
+        // Second pass: For each invoice, decide what to keep
+        foreach ($invoices as $invoice) {
+            $baseKey = $this->getInvoiceBaseNumber($invoice);
+            
+            // Case 1: This invoice has revisions (there's at least one revision for this base)
+            if (isset($baseKeysWithRevisions[$baseKey])) {
+                // If this is the original (is_revision = false), SKIP it
+                if (!$invoice->is_revision) {
+                    continue;
+                }
+                
+                // If this is a revision, keep only the latest one
+                if (!isset($grouped[$baseKey]) || $invoice->revision_number > $grouped[$baseKey]->revision_number) {
+                    $grouped[$baseKey] = $invoice;
+                }
+            } 
+            // Case 2: No revisions for this invoice, keep the original
+            else {
+                // Only keep if it's the original (no revision suffix)
+                if (!$invoice->is_revision) {
+                    $grouped[$baseKey] = $invoice;
+                }
+            }
+        }
+        
+        return collect(array_values($grouped));
     }
-    
-    return collect(array_values($grouped));
-}
 
-protected function getInvoiceBaseNumber($invoice)
-{
-    if ($invoice->original_invoice_number) {
-        return $invoice->original_invoice_number;
+    protected function getInvoiceBaseNumber($invoice)
+    {
+        if ($invoice->original_invoice_number) {
+            return $invoice->original_invoice_number;
+        }
+        
+        $base = $invoice->invoice_number;
+        $base = preg_replace('/_R\d+\/R\d+$/', '', $base);
+        $base = preg_replace('/_R\d+_R\d+$/', '', $base);
+        $base = preg_replace('/\/R\d+$/', '', $base);
+        $base = preg_replace('/R\d+$/', '', $base);
+        $base = preg_replace('/_R\d+$/', '', $base);
+        
+        return $base;
     }
-    
-    $base = $invoice->invoice_number;
-    $base = preg_replace('/_R\d+\/R\d+$/', '', $base);
-    $base = preg_replace('/_R\d+_R\d+$/', '', $base);
-    $base = preg_replace('/\/R\d+$/', '', $base);
-    $base = preg_replace('/R\d+$/', '', $base);
-    $base = preg_replace('/_R\d+$/', '', $base);
-    
-    return $base;
-}
 
     protected function getTravelDates($email)
     {
@@ -311,7 +376,7 @@ protected function getInvoiceBaseNumber($invoice)
         return $start ?: 'NA';
     }
 
-   protected function uploadToOneDrive($filePath, $date)
+    protected function uploadToOneDrive($filePath, $date)
     {
         try {
             $filename = basename($filePath);
@@ -337,7 +402,6 @@ protected function getInvoiceBaseNumber($invoice)
             
             $graphService = new MicrosoftGraphService();
             
-            // Get token via reflection
             $reflection = new \ReflectionProperty($graphService, 'accessToken');
             $reflection->setAccessible(true);
             $token = $reflection->getValue($graphService);
@@ -382,7 +446,6 @@ protected function getInvoiceBaseNumber($invoice)
                 $this->error("❌ Response: " . $response->getBody()->getContents());
                 Log::error("OneDrive upload failed: " . $response->getBody()->getContents());
                 
-                // Try alternative endpoint
                 $this->info("🔄 Trying alternative endpoint...");
                 return $this->uploadToOneDriveAlternative($filePath, $date);
             }
@@ -394,7 +457,7 @@ protected function getInvoiceBaseNumber($invoice)
         }
     }
 
-   protected function uploadToOneDriveAlternative($filePath, $date)
+    protected function uploadToOneDriveAlternative($filePath, $date)
     {
         try {
             $filename = basename($filePath);
@@ -441,39 +504,4 @@ protected function getInvoiceBaseNumber($invoice)
             return false;
         }
     }
-/**
- * Send simple notification email
- */
-protected function sendNotificationEmail($date)
-{
-    try {
-        $formattedDate = date('d/m/Y', strtotime($date));
-        $to = 'pradeep.kumar@bcdtravel.lk';
-        // $to = 'reetha@aahaas.com';
-        $subject = "Daily Invoice Report Uploaded - {$formattedDate}";
-        
-        $message = "Dear Sir,\n\n";
-        $message .= "The daily invoice report for {$formattedDate} has been successfully uploaded to the shared OneDrive folder.\n\n";
-        $message .= "📁 Folder: Invoice Report\n";
-        $message .= "📄 File: daily_invoice_report_{$date}.xlsx\n\n";
-        $message .= "You can access the report from the shared OneDrive folder.\n\n";
-        $message .= "─────────────────────────────\n";
-        $message .= "Generated by: Invoice Processing System\n";
-        $message .= "Time: " . now()->format('d/m/Y H:i:s') . "\n";
-        $message .= "─────────────────────────────\n";
-        $message .= "This is an automated notification.\n";
-
-        Mail::raw($message, function ($mail) use ($to, $subject) {
-            $mail->to($to)->subject($subject);
-        });
-
-        $this->info("📧 Notification email sent to: {$to}");
-        Log::info("Daily report notification sent to: {$to}");
-
-    } catch (\Exception $e) {
-        $this->error("❌ Failed to send notification: " . $e->getMessage());
-        Log::error("Failed to send notification: " . $e->getMessage());
-    }
-}
-    
 }

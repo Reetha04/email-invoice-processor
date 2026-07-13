@@ -966,8 +966,19 @@ protected function processFileData($tcFile, $pnlFile, $filePath, $folderName, $i
         }
         
         // ✅ FORCE total_amount from OpenAI or fallback
-        $extractedData['total_amount'] = $totalAmount;
-        $extractedData['currency'] = ($country === 'MY') ? 'MYR' : (($country === 'VN' || $country === 'LK') ? 'USD' : 'MYR');
+    // ✅ FORCE total_amount from OpenAI or fallback
+$extractedData['total_amount'] = $totalAmount;
+
+// ✅ FIX: Handle SG explicitly
+if ($country === 'MY') {
+    $extractedData['currency'] = 'MYR';
+} elseif ($country === 'VN' || $country === 'LK') {
+    $extractedData['currency'] = 'USD';
+} elseif ($country === 'SG') {
+    $extractedData['currency'] = 'SGD';  // ← ADD THIS
+} else {
+    $extractedData['currency'] = 'MYR';  // Default fallback
+}
         $extractedData['invoice_number'] = $invoiceNumber;
         $extractedData['folder_name'] = $folderName;
         
@@ -2160,7 +2171,9 @@ protected function extractWithOpenAI($content, $folderName, $invoiceNumber)
                     $data['currency'] = 'MYR';
                 } elseif ($isVietnam) {
                     $data['currency'] = 'USD';
-                } else {
+                }elseif ($isSingapore) {  // ← ADD THIS
+    $data['currency'] = 'SGD';
+} else {
                     $data['currency'] = $currency;
                 }
             }
@@ -2643,7 +2656,10 @@ protected function createPnLRecord($data, $import)
 protected function createPnLItems($data, $record)
 {
     try {
-        
+        if ($record->country_code === 'VN') {
+            $this->createPnLItemsForVN($data, $record);
+            return;
+        }
        if ($record->country_code === 'LK') {
             // ✅ Use the SriLankaPnLParser for LK TC/P&L files
             $lkParser = new \App\Services\SriLankaPnLParser();
@@ -2873,10 +2889,395 @@ protected function createPnLItems($data, $record)
         Log::error($e->getTraceAsString());
     }
 }
+/**
+ * ✅ Create P&L items for VIETNAM format - CLEAN VERSION
+ */
+protected function createPnLItemsForVN($data, $record)
+{
+    $import = \App\Models\OneDriveImport::find($record->staging_import_id);
+    if (!$import) {
+        Log::warning("⚠️ No import record found for P&L items: {$record->id}");
+        return;
+    }
+    
+    $tcContent = $import->tc_file_content;
+    $currency = $record->currency ?? 'USD';
+    $itemsCreated = 0;
+    
+    Log::info("📄 Creating VN P&L items for: {$record->invoice_number}");
+    
+    // ✅ Clear existing items first
+    PnlItem::where('pnl_record_id', $record->id)->delete();
+    
+    // ✅ 1. Extract HOTEL items from the hotel table section
+    // Look for: "City Hotel Nights Room Type Meal Type" table
+    $hotels = $this->extractVNHotels($tcContent);
+    foreach ($hotels as $hotel) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'HOTEL',
+            'service_name' => $hotel['name'],
+            'amount_original' => -abs($hotel['amount']),
+            'currency' => $currency,
+            'start_date' => $hotel['check_in'] ?? $record->travel_start_date,
+            'end_date' => $hotel['check_out'] ?? $record->travel_end_date,
+            'nights' => $hotel['nights'] ?? 1,
+            'item_details' => json_encode([
+                'room_type' => $hotel['room_type'] ?? '',
+                'meal_plan' => $hotel['meal_plan'] ?? '',
+                'city' => $hotel['city'] ?? '',
+            ])
+        ]);
+        $itemsCreated++;
+        Log::info("✅ VN HOTEL: {$hotel['name']} - \${$hotel['amount']}");
+    }
+    
+    // ✅ 2. Extract TRANSPORT items - CLEAN versions
+    $transports = $this->extractVNTransports($tcContent);
+    foreach ($transports as $transport) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'TRANSPORT',
+            'service_name' => $transport['name'],
+            'amount_original' => -abs($transport['amount']),
+            'currency' => $currency,
+            'start_date' => $record->travel_start_date,
+            'end_date' => $record->travel_end_date,
+            'item_details' => json_encode(['remarks' => $transport['name']])
+        ]);
+        $itemsCreated++;
+        Log::info("✅ VN TRANSPORT: {$transport['name']}");
+    }
+    
+    // ✅ 3. Extract ATTRACTION items - CLEAN versions
+    $attractions = $this->extractVNAttractions($tcContent);
+    foreach ($attractions as $attraction) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'ATTRACTION',
+            'service_name' => $attraction['name'],
+            'amount_original' => -abs($attraction['amount']),
+            'currency' => $currency,
+            'start_date' => $record->travel_start_date,
+            'end_date' => $record->travel_end_date,
+            'item_details' => json_encode([
+                'remarks' => $attraction['name'],
+                'day' => $attraction['day'] ?? null
+            ])
+        ]);
+        $itemsCreated++;
+        Log::info("✅ VN ATTRACTION: {$attraction['name']}");
+    }
+    
+    // ✅ 4. Extract MEALS
+    $meals = $this->extractVNMeals($tcContent);
+    foreach ($meals as $meal) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'MEALS',
+            'service_name' => $meal['name'],
+            'amount_original' => -abs($meal['amount']),
+            'currency' => $currency,
+            'start_date' => $record->travel_start_date,
+            'end_date' => $record->travel_end_date,
+            'item_details' => json_encode(['remarks' => $meal['name']])
+        ]);
+        $itemsCreated++;
+        Log::info("✅ VN MEALS: {$meal['name']}");
+    }
+    
+    // ✅ 5. If no items, create fallback
+    if ($itemsCreated == 0 && $record->amount > 0) {
+        PnlItem::create([
+            'pnl_record_id' => $record->id,
+            'type' => 'TOUR PACKAGE',
+            'service_name' => 'Vietnam Tour Package',
+            'amount_original' => -abs($record->amount),
+            'currency' => $currency,
+            'start_date' => $record->travel_start_date,
+            'end_date' => $record->travel_end_date,
+            'item_details' => json_encode(['remarks' => 'Total package cost'])
+        ]);
+        Log::info("✅ VN FALLBACK item: {$record->amount}");
+    }
+    
+    Log::info("✅ Created {$itemsCreated} VN P&L items for record: {$record->id}");
+}
 
 /**
- * ✅ Extract Transport items from TC data
+ * Extract Vietnam Hotels from TC content
  */
+private function extractVNHotels($tcContent)
+{
+    $hotels = [];
+    
+    // Look for hotel table pattern: "City Hotel Nights Room Type Meal Type"
+    // Example: "HanoiAug 1, 2026 - Aug 3, 2026 La Passion Hanoi Hotel & Spa - #31670 2 Deluxe Double BB"
+    
+    $pattern = '/([A-Za-z\s]+)([A-Za-z]+\s+\d{1,2},\s+\d{4})\s*-\s*([A-Za-z]+\s+\d{1,2},\s+\d{4})\s+([A-Za-z0-9\s&\-\.#]+?)\s+(\d+)\s+([A-Za-z\s]+)\s+([A-Za-z\s]+)/i';
+    
+    if (preg_match_all($pattern, $tcContent, $matches, PREG_SET_ORDER)) {
+        foreach ($matches as $match) {
+            $city = trim($match[1]);
+            $checkInRaw = trim($match[2]);
+            $checkOutRaw = trim($match[3]);
+            $hotelName = trim($match[4]);
+            $nights = intval($match[5]);
+            $roomType = trim($match[6]);
+            $mealPlan = trim($match[7]);
+            
+            // Skip "Own Arrangement"
+            if (stripos($hotelName, 'Own Arrangement') !== false) {
+                continue;
+            }
+            
+            $checkIn = date('Y-m-d', strtotime($checkInRaw));
+            $checkOut = date('Y-m-d', strtotime($checkOutRaw));
+            
+            // Clean hotel name - remove trailing numbers or special chars
+            $hotelName = preg_replace('/\s*-\s*#\d+\s*$/', '', $hotelName);
+            $hotelName = preg_replace('/\s*\d+\s*Star\s*$/', '', $hotelName);
+            $hotelName = trim($hotelName);
+            
+            $hotels[] = [
+                'name' => $hotelName,
+                'city' => $city,
+                'check_in' => $checkIn,
+                'check_out' => $checkOut,
+                'nights' => $nights,
+                'room_type' => $roomType,
+                'meal_plan' => $mealPlan,
+                'amount' => 0 // Amount will be distributed later
+            ];
+        }
+    }
+    
+    // If no hotels found, try fallback pattern
+    if (empty($hotels)) {
+        // Simple pattern: "Hotel Name - #123 2 Deluxe Double BB"
+        if (preg_match_all('/([A-Za-z0-9\s&\-\.#]+?)\s+(\d+)\s+([A-Za-z\s]+)\s+([A-Za-z\s]+)/i', $tcContent, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $match) {
+                $hotelName = trim($match[1]);
+                $nights = intval($match[2]);
+                $roomType = trim($match[3]);
+                $mealPlan = trim($match[4]);
+                
+                if (stripos($hotelName, 'Own Arrangement') !== false) {
+                    continue;
+                }
+                
+                // Clean up
+                $hotelName = preg_replace('/\s*-\s*#\d+\s*$/', '', $hotelName);
+                $hotelName = trim($hotelName);
+                
+                if (!empty($hotelName) && strlen($hotelName) > 3) {
+                    $hotels[] = [
+                        'name' => $hotelName,
+                        'city' => '',
+                        'check_in' => null,
+                        'check_out' => null,
+                        'nights' => $nights,
+                        'room_type' => $roomType,
+                        'meal_plan' => $mealPlan,
+                        'amount' => 0
+                    ];
+                }
+            }
+        }
+    }
+    
+    // Distribute total amount among hotels
+    $totalAmount = 0;
+    foreach ($hotels as $hotel) {
+        $totalAmount += $hotel['amount'];
+    }
+    
+    return $hotels;
+}
+
+/**
+ * Extract Vietnam Transport items - CLEAN
+ */
+private function extractVNTransports($tcContent)
+{
+    $transports = [];
+    $seen = [];
+    
+    // Look for transfer patterns
+    $patterns = [
+        '/Airport to Hotel\s*\|\s*Private Transfers?/i',
+        '/Hotel to Airport\s*\|\s*Private Transfers?/i',
+        '/Private\s+Transfer/i',
+        '/City Tour\s+[A-Za-z\s]+Airport to Hotel/i',
+        '/Da Nang Airport or train station to Hotel/i',
+    ];
+    
+    foreach ($patterns as $pattern) {
+        if (preg_match_all($pattern, $tcContent, $matches)) {
+            foreach ($matches[0] as $match) {
+                $name = trim($match);
+                // Clean up - remove any description
+                $name = preg_replace('/\s*\|\s*Private Transfers?:.*$/i', '', $name);
+                $name = preg_replace('/\s*\|\s*Private Transfers/i', '', $name);
+                $name = preg_replace('/:\s*Step into comfort.*$/i', '', $name);
+                $name = trim($name);
+                
+                if (!empty($name) && strlen($name) > 5 && !in_array($name, $seen)) {
+                    $seen[] = $name;
+                    $transports[] = [
+                        'name' => $name,
+                        'amount' => 0 // Transport included in package
+                    ];
+                }
+            }
+        }
+    }
+    
+    // Also look for "Transfer" in Day descriptions
+    if (preg_match_all('/DAY\s+\d+\s*[-:]\s*([^:]+?)(?:Transfer|Private Transfer)/i', $tcContent, $matches)) {
+        foreach ($matches[1] as $match) {
+            $name = trim($match) . ' Transfer';
+            $name = preg_replace('/\s*\|\s*Private Transfers?:.*$/i', '', $name);
+            $name = preg_replace('/:\s*Step into comfort.*$/i', '', $name);
+            $name = trim($name);
+            
+            if (!empty($name) && strlen($name) > 5 && !in_array($name, $seen)) {
+                $seen[] = $name;
+                $transports[] = [
+                    'name' => $name,
+                    'amount' => 0
+                ];
+            }
+        }
+    }
+    
+    return $transports;
+}
+
+/**
+ * Extract Vietnam Attraction items - CLEAN
+ */
+private function extractVNAttractions($tcContent)
+{
+    $attractions = [];
+    $seen = [];
+    
+    // Clean the content first - extract only the attraction names
+    $lines = explode("\n", $tcContent);
+    
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if (empty($line)) continue;
+        
+        // Look for DAY patterns with activities
+        if (preg_match('/DAY\s+(\d+)\s*[-:]\s*(.+)/i', $line, $match)) {
+            $day = intval($match[1]);
+            $description = trim($match[2]);
+            
+            // Extract attraction names from description
+            $attractionNames = [
+                'Bana Hills' => '/Bana\s*Hills/i',
+                'Golden Bridge' => '/Golden\s*Bridge/i',
+                'Marble Mountain' => '/Marble\s*Mountain/i',
+                'Hoi An' => '/Hoi\s*An/i',
+                'Halong Bay' => '/Halong\s*Bay/i',
+                'Cable Car' => '/Cable\s*Car/i',
+                'Aquatopia' => '/Aquatopia/i',
+                'Water Park' => '/Water\s*Park/i',
+                'City Tour' => '/City\s*Tour/i',
+                'SIC Tour' => '/SIC\s*(?:Transfer|Tour)?/i',
+            ];
+            
+            foreach ($attractionNames as $name => $pattern) {
+                if (preg_match($pattern, $description) && !in_array($name, $seen)) {
+                    $seen[] = $name;
+                    $attractions[] = [
+                        'name' => "Day {$day} - {$name}",
+                        'amount' => 0,
+                        'day' => $day
+                    ];
+                    break;
+                }
+            }
+            
+            // Also check for specific tour names
+            if (preg_match('/(Full-day\s+[A-Za-z\s]+Tour|Half-day\s+[A-Za-z\s]+Tour|SIC\s+[A-Za-z\s]+)/i', $description, $tourMatch)) {
+                $tourName = trim($tourMatch[1]);
+                if (!in_array($tourName, $seen) && strlen($tourName) > 10) {
+                    $seen[] = $tourName;
+                    $attractions[] = [
+                        'name' => "Day {$day} - {$tourName}",
+                        'amount' => 0,
+                        'day' => $day
+                    ];
+                }
+            }
+        }
+    }
+    
+    // If no attractions found, look for specific keywords in the entire text
+    if (empty($attractions)) {
+        $keywords = [
+            'Bana Hills' => '/Bana\s*Hills/i',
+            'Golden Bridge' => '/Golden\s*Bridge/i',
+            'Marble Mountain' => '/Marble\s*Mountain/i',
+            'Hoi An' => '/Hoi\s*An/i',
+            'Halong Bay' => '/Halong\s*Bay/i',
+            'Cable Car' => '/Cable\s*Car/i',
+            'Aquatopia' => '/Aquatopia/i',
+        ];
+        
+        $day = 1;
+        foreach ($keywords as $name => $pattern) {
+            if (preg_match($pattern, $tcContent) && !in_array($name, $seen)) {
+                $seen[] = $name;
+                $attractions[] = [
+                    'name' => "Day {$day} - {$name}",
+                    'amount' => 0,
+                    'day' => $day
+                ];
+                $day++;
+            }
+        }
+    }
+    
+    return $attractions;
+}
+
+/**
+ * Extract Vietnam Meals - CLEAN
+ */
+private function extractVNMeals($tcContent)
+{
+    $meals = [];
+    $seen = [];
+    
+    $mealTypes = ['Breakfast', 'Lunch', 'Dinner'];
+    
+    foreach ($mealTypes as $meal) {
+        if (preg_match("/{$meal}/i", $tcContent) && !in_array($meal, $seen)) {
+            $seen[] = $meal;
+            $meals[] = [
+                'name' => $meal,
+                'amount' => 0
+            ];
+        }
+    }
+    
+    // Also check for "Meal Plan BB" 
+    if (preg_match('/Meal\s*Plan\s*(BB|HB|FB)/i', $tcContent, $match)) {
+        $plan = $match[1];
+        if (!in_array("Meal Plan {$plan}", $seen)) {
+            $seen[] = "Meal Plan {$plan}";
+            $meals[] = [
+                'name' => "Meal Plan {$plan}",
+                'amount' => 0
+            ];
+        }
+    }
+    
+    return $meals;
+}
 protected function extractTransportFromTC($data)
 {
     $items = [];
